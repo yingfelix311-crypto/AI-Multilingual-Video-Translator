@@ -126,12 +126,12 @@ VideoLingo提供了多种 tts 接入方式，以下是对比（如不使用配�
 VideoLingo 支持 Windows、macOS 和 Linux 系统，可使用 CPU 或 GPU 运行。
 
 > **注意:** 在 Windows 上使用 NVIDIA GPU 加速，请先完成以下步骤:
-> 1. 安装 [CUDA Toolkit 12.6](https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.76_windows.exe) 或更高版本（12.8 / 13.x 均可，安装脚本会自动适配）
+> 1. 安装 [CUDA Toolkit 12.6](https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.76_windows.exe) 或更高版本（12.8 / 12.9 / 13.x 均可，安装脚本会自动适配）
 > 2. 安装 [CUDNN 9.3.0](https://developer.download.nvidia.com/compute/cudnn/9.3.0/local_installers/cudnn_9.3.0_windows.exe)
 > 3. 将 `C:\Program Files\NVIDIA\CUDNN\v9.3\bin\12.6` 添加到系统 PATH
 > 4. 重启电脑
 >
-> ⚠️ **踩坑提示:** 安装脚本会根据你的 CUDA 版本自动选择合适的 PyTorch 轮子（cu128 / cu126）。即使你装的是 CUDA 13.x，也**不需要手动安装 cu130/cu131 的 PyTorch**——这会导致 ctranslate2 找不到 `cublas64_12.dll` 而报错。
+> ⚠️ **踩坑提示:** 安装脚本通过 `nvidia-smi` 检测驱动的 CUDA 版本，自动选择合适的 PyTorch 轮子（cu129 / cu128 / cu126）。RTX 50 系列（Blackwell）显卡会自动选择包含 sm_100 内核的 cu129 轮子。**不需要手动安装 cu130/cu131 的 PyTorch**——这会导致 ctranslate2 找不到 `cublas64_12.dll` 而报错。
 
 > **注意:** FFmpeg 是必需的，请通过包管理器安装：
 > - Windows：```choco install ffmpeg```（通过 [Chocolatey](https://chocolatey.org/)）
@@ -193,7 +193,7 @@ VideoLingo 支持 Windows、macOS 和 Linux 系统，可使用 CPU 或 GPU 运�
 
 3. **local_files_only=True**：网络问题引起的模型下载失败，需要确认网络能 ping 通 `huggingface.co`。
 
-4. **`cublas64_12.dll not found`**: 安装了 CUDA 13.x 后使用了 cu130/cu131 PyTorch 轮子。**解决方案：** 必须使用 cu128 或 cu126 轮子（`install.py` 已自动处理），因为 ctranslate2 只支持 CUDA 12。重新运行 `python install.py` 即可。
+4. **`cublas64_12.dll not found`**: 安装了 CUDA 13.x 后使用了 cu130/cu131 PyTorch 轮子。**解决方案：** 必须使用 cu129、cu128 或 cu126 轮子（`install.py` 已通过 `nvidia-smi` 自动检测处理），因为 ctranslate2 只支持 CUDA 12。重新运行 `python install.py` 即可。
 
 5. **Whisper 模型加载时无报错直接段错误 (Segfault)**: ctranslate2 版本与 cuDNN 版本不匹配。**解决方案：** 确保 `ctranslate2>=4.5.0`（支持 cuDNN 9，PyTorch 2.6+ 自带 cuDNN 9）。
 

@@ -126,12 +126,12 @@ After configuration, select `Reference Audio Mode` in the sidebar (see Yuque doc
 VideoLingo supports Windows, macOS and Linux systems, and can run on CPU or GPU.
 
 > **Note:** To use NVIDIA GPU acceleration on Windows, please complete the following steps first:
-> 1. Install [CUDA Toolkit 12.6](https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.76_windows.exe) or newer (12.8 / 13.x all work — the install script auto-adapts)
+> 1. Install [CUDA Toolkit 12.6](https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.76_windows.exe) or newer (12.8 / 12.9 / 13.x all work — the install script auto-adapts)
 > 2. Install [CUDNN 9.3.0](https://developer.download.nvidia.com/compute/cudnn/9.3.0/local_installers/cudnn_9.3.0_windows.exe)
 > 3. Add `C:\Program Files\NVIDIA\CUDNN\v9.3\bin\12.6` to your system PATH
 > 4. Restart your computer
 >
-> ⚠️ **Pitfall:** The install script auto-selects the best PyTorch wheel (cu128 / cu126) for your CUDA version. Even on CUDA 13.x, **do NOT manually install cu130/cu131 PyTorch** — this causes ctranslate2 to fail with `cublas64_12.dll not found`.
+> ⚠️ **Pitfall:** The install script uses `nvidia-smi` to detect your driver's CUDA version and auto-selects the best PyTorch wheel (cu129 / cu128 / cu126). For RTX 50 series (Blackwell) GPUs, cu129 wheels with sm_100 kernels are selected automatically. **Do NOT manually install cu130/cu131 PyTorch** — this causes ctranslate2 to fail with `cublas64_12.dll not found`.
 
 > **Note:** FFmpeg is required. Please install it via package managers:
 > - Windows: ```choco install ffmpeg``` (via [Chocolatey](https://chocolatey.org/))
@@ -192,7 +192,7 @@ Note: This section is still in early development and may have limited functional
 
 3. **local_files_only=True**: Model download failure due to network issues, need to verify network can ping `huggingface.co`.
 
-4. **`cublas64_12.dll not found`**: Installed CUDA 13.x and used cu130/cu131 PyTorch wheels. **Solution:** Must use cu128 or cu126 wheels (`install.py` handles this automatically) because ctranslate2 only supports CUDA 12. Re-run `python install.py`.
+4. **`cublas64_12.dll not found`**: Installed CUDA 13.x and used cu130/cu131 PyTorch wheels. **Solution:** Must use cu129, cu128, or cu126 wheels (`install.py` handles this automatically via `nvidia-smi` detection) because ctranslate2 only supports CUDA 12. Re-run `python install.py`.
 
 5. **Whisper model loading segfaults silently**: ctranslate2 version mismatches cuDNN version. **Solution:** Ensure `ctranslate2>=4.5.0` (supports cuDNN 9, which PyTorch 2.6+ ships with).
 

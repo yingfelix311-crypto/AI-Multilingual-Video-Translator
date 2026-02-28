@@ -93,34 +93,43 @@ def check_ffmpeg():
     except Exception:
         pass
 
-def _detect_cuda_index():
-    """Detect the installed CUDA toolkit version and return the best PyTorch
-    wheel index URL.  Falls back to cu126 when detection fails.
-
-    IMPORTANT: We deliberately use CUDA 12.x wheels even on CUDA 13+ systems.
-    ctranslate2 (used by faster-whisper/whisperx) is only compiled for CUDA 12
-    and needs cublas64_12.dll.  CUDA 12.x PyTorch wheels provide this DLL, and
-    NVIDIA drivers are backward-compatible so CUDA 12 code runs fine on a
-    CUDA 13 driver.  Using cu128/cu126 avoids the cublas version mismatch."""
+def _detect_cuda_version_from_smi():
+    """Detect CUDA version from nvidia-smi output (driver's CUDA capability)."""
     import re
-    cuda_version = None
     try:
         result = subprocess.run(
-            ["nvcc", "--version"], capture_output=True, text=True, timeout=10
+            ["nvidia-smi"], capture_output=True, text=True, timeout=10
         )
-        m = re.search(r"release\s+(\d+)\.(\d+)", result.stdout)
+        m = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", result.stdout)
         if m:
-            cuda_version = (int(m.group(1)), int(m.group(2)))
+            return (int(m.group(1)), int(m.group(2)))
     except Exception:
         pass
+    return None
 
-    # Map CUDA toolkit major.minor to a CUDA 12.x PyTorch wheel index.
-    # PyTorch 2.8.0 (required by whisperx 3.8.1) ships cu126, cu128, cu129.
-    # We prefer cu128 for CUDA >=12.8 (including 13.x) and cu126 otherwise.
+
+def _detect_cuda_index():
+    """Detect the CUDA version and return the best PyTorch wheel index URL.
+    Falls back to cu126 when detection fails.
+
+    For RTX 50 series (Blackwell architecture, compute capability 10.0+),
+    we need PyTorch wheels compiled with CUDA 12.8+ that include sm_100 kernels.
+
+    We prefer nvidia-smi (driver CUDA version) over nvcc (toolkit version) because:
+    - Driver version determines what CUDA features the GPU can run at runtime
+    - Toolkit version is for compilation, not runtime compatibility
+    - Blackwell GPUs need cu129+ wheels even if user has older CUDA toolkit installed
+    """
+    cuda_version = _detect_cuda_version_from_smi()
+
+    # Map CUDA major.minor to PyTorch wheel index.
+    # For CUDA 13.x (RTX 50 series / Blackwell), use cu129 which includes sm_100 kernels.
     INDEX = "https://download.pytorch.org/whl"
     CU_TAGS = [
-        ((12, 8), "cu128"),
-        ((12, 6), "cu126"),
+        ((13, 0), "cu129"),  # CUDA 13.x (Blackwell / RTX 50 series)
+        ((12, 9), "cu129"),  # CUDA 12.9+
+        ((12, 8), "cu128"),  # CUDA 12.8+
+        ((12, 6), "cu126"),  # CUDA 12.6+
     ]
 
     if cuda_version:
