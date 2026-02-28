@@ -149,6 +149,12 @@ def main():
 
     @except_handler("Failed to install project")
     def install_requirements():
+        # Install demucs separately with --no-deps to avoid its outdated
+        # torchaudio<2.2 constraint conflicting with whisperx's torchaudio>=2.5.1.
+        # demucs works fine with torchaudio 2.6.0 at runtime.
+        console.print(Panel(t("Installing demucs (--no-deps to avoid torchaudio conflict)..."), style="cyan"))
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-deps", "demucs[dev]@git+https://github.com/adefossez/demucs"])
+
         console.print(Panel(t("Installing project in editable mode using `pip install -e .`"), style="cyan"))
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-e", "."], env={**os.environ, "PIP_NO_CACHE_DIR": "0", "PYTHONIOENCODING": "utf-8"})
 

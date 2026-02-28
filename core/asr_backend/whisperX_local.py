@@ -9,6 +9,19 @@ from rich import print as rprint
 from core.utils import *
 
 warnings.filterwarnings("ignore")
+
+# PyTorch 2.6 changed torch.load default to weights_only=True.
+# pyannote checkpoints contain omegaconf objects that fail the safety check.
+# Monkey-patch torch.load to default to weights_only=False (matching <2.6 behavior).
+# This is safe here because all model files are from trusted sources (HuggingFace/pyannote).
+import functools
+_original_torch_load = torch.load
+@functools.wraps(_original_torch_load)
+def _patched_torch_load(*args, **kwargs):
+    if kwargs.get("weights_only") is None:
+        kwargs["weights_only"] = False
+    return _original_torch_load(*args, **kwargs)
+torch.load = _patched_torch_load
 MODEL_DIR = load_key("model_dir")
 
 @except_handler("failed to check hf mirror", default_return=None)
