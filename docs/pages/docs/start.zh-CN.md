@@ -5,13 +5,21 @@
 
 ### 1. **大模型的 API_KEY**：
 
-| 推荐模型 | 推荐提供商 | base_url | 价格 | 效果 |
-|:-----|:---------|:---------|:-----|:---------|
-| claude-3-5-sonnet-20240620 | [yunwu.ai](https://yunwu.ai/register?aff=TXMB) | https://yunwu.ai | $1 / 1M tokens | 🤩 |
-| gpt-4.1 | [yunwu.ai](https://yunwu.ai/register?aff=TXMB) | https://yunwu.ai | $0.5 / 1M tokens | 🤩 |
-| gemini-2.0-flash | [302AI](https://gpt302.saaslink.net/C2oHR9) | https://api.302.ai | $0.3 / 1M tokens | 😃 |
-| deepseek-v3 | [302AI](https://gpt302.saaslink.net/C2oHR9) | https://api.302.ai | $1 / 1M tokens | 🥳 |
-| qwen2.5-coder:32b | [Ollama](https://ollama.ai) | http://localhost:11434 | 0 | 😃 |
+| 推荐模型 | 厂商 | 效果 | 性价比 |
+|:-----|:---------|:-----|:---------|
+| claude-sonnet-4-6 | [Anthropic](https://www.anthropic.com) | 🤩 | ⭐⭐⭐ |
+| claude-opus-4-6 | [Anthropic](https://www.anthropic.com) | 🏆 | ⭐⭐ |
+| gpt-5.2 | [OpenAI](https://openai.com) | 🤩 | ⭐⭐⭐ |
+| gemini-3-flash | [Google](https://ai.google.dev) | 😃 | ⭐⭐⭐⭐⭐ |
+| gemini-3.1-pro | [Google](https://ai.google.dev) | 🤩 | ⭐⭐⭐ |
+| minimax-m2.5 | [MiniMax](https://www.minimax.io) | 😃 | ⭐⭐⭐⭐⭐ |
+| kimi-k2.5 | [Moonshot AI](https://www.moonshot.cn) | 😃 | ⭐⭐⭐⭐ |
+| deepseek-v3 | [DeepSeek](https://www.deepseek.com) | 🥳 | ⭐⭐⭐⭐ |
+| qwen3-32b | [Ollama](https://ollama.ai) 本地部署 | 😃 | ♾️ 免费 |
+
+> **提示：** 模型价格变动频繁，请前往各厂商官网查看最新定价。[models.dev](https://models.dev) 可横向比较各家模型的价格和能力。
+>
+> **API 中转推荐：** 如果无法直接访问海外 API，推荐使用 [OpenRouter](https://openrouter.ai)（支持上述所有海外模型，统一 OpenAI 格式接口，按量付费无月费）。
 
 注：支持 OpenAI 格式接口，可自行尝试不同模型。但处理过程涉及多步思维链和复杂的json格式，**不建议使用小于 30B 的模型**。
 
@@ -118,15 +126,19 @@ VideoLingo提供了多种 tts 接入方式，以下是对比（如不使用配�
 VideoLingo 支持 Windows、macOS 和 Linux 系统，可使用 CPU 或 GPU 运行。
 
 > **注意:** 在 Windows 上使用 NVIDIA GPU 加速，请先完成以下步骤:
-> 1. 安装 [CUDA Toolkit 12.6](https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.76_windows.exe)
+> 1. 安装 [CUDA Toolkit 12.6](https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.76_windows.exe) 或更高版本（12.8 / 13.x 均可，安装脚本会自动适配）
 > 2. 安装 [CUDNN 9.3.0](https://developer.download.nvidia.com/compute/cudnn/9.3.0/local_installers/cudnn_9.3.0_windows.exe)
 > 3. 将 `C:\Program Files\NVIDIA\CUDNN\v9.3\bin\12.6` 添加到系统 PATH
 > 4. 重启电脑
+>
+> ⚠️ **踩坑提示:** 安装脚本会根据你的 CUDA 版本自动选择合适的 PyTorch 轮子（cu128 / cu126）。即使你装的是 CUDA 13.x，也**不需要手动安装 cu130/cu131 的 PyTorch**——这会导致 ctranslate2 找不到 `cublas64_12.dll` 而报错。
 
 > **注意:** FFmpeg 是必需的，请通过包管理器安装：
 > - Windows：```choco install ffmpeg```（通过 [Chocolatey](https://chocolatey.org/)）
 > - macOS：```brew install ffmpeg```（通过 [Homebrew](https://brew.sh/)）
 > - Linux：```sudo apt install ffmpeg```（Debian/Ubuntu）
+>
+> ⚠️ **踩坑提示:** 不要使用 conda-forge 的 ffmpeg（缺少 libmp3lame 编码器）。建议用系统包管理器安装完整版。
 
 开始安装 VideoLingo 之前，请确保安装了 Git 和 Anaconda。
 
@@ -136,16 +148,20 @@ VideoLingo 支持 Windows、macOS 和 Linux 系统，可使用 CPU 或 GPU 运�
    cd VideoLingo
    ```
 
-2. 创建并活虚拟环境（**必须使用 3.10**）：
+2. 创建并激活虚拟环境（**必须使用 3.10**）：
    ```bash
    conda create -n videolingo python=3.10.0 -y
    conda activate videolingo
    ```
 
+   > ⚠️ **踩坑提示:** 请确保用的是 conda 环境里的 pip。如果 Windows 系统的 `site-packages` 不可写（如 `C:\ProgramData\anaconda3\`），pip 会悄悄把包装到用户目录，导致 conda 环境里找不到。遇到此问题可以用管理员权限运行终端。
+
 3. 运行安装脚本：
    ```bash
    python install.py
    ```
+
+   > ⚠️ **安装顺序说明:** `install.py` 会按正确顺序安装依赖：先装 PyTorch（锁定 CUDA 版本），再用 `--no-deps` 装 demucs（避免 torchaudio 被降级），最后装其余依赖。**不要手动打乱顺序。**
 
 4. 🎉 输入命令或点击 `一键启动.bat` 启动 Streamlit 应用：
    ```bash
@@ -166,7 +182,7 @@ VideoLingo 支持 Windows、macOS 和 Linux 系统，可使用 CPU 或 GPU 运�
 
 这个模式仍处于早期开发阶段，可能有潜在的错误。
 
-## 🚨 常见报错
+## 🚨 常见报错与踩坑
 
 1. **翻译过程的 'All array must be of the same length' 或 'Key Error'**: 
    - 原因1：弱模型遵循JSON格式能力较弱导致响应解析错误。
@@ -176,3 +192,18 @@ VideoLingo 支持 Windows、macOS 和 Linux 系统，可使用 CPU 或 GPU 运�
 2. **'Retry Failed', 'SSL', 'Connection', 'Timeout'**: 通常是网络问题。解决方案：中国大陆用户请切换网络节点重试。
 
 3. **local_files_only=True**：网络问题引起的模型下载失败，需要确认网络能 ping 通 `huggingface.co`。
+
+4. **`cublas64_12.dll not found`**: 安装了 CUDA 13.x 后使用了 cu130/cu131 PyTorch 轮子。**解决方案：** 必须使用 cu128 或 cu126 轮子（`install.py` 已自动处理），因为 ctranslate2 只支持 CUDA 12。重新运行 `python install.py` 即可。
+
+5. **Whisper 模型加载时无报错直接段错误 (Segfault)**: ctranslate2 版本与 cuDNN 版本不匹配。**解决方案：** 确保 `ctranslate2>=4.5.0`（支持 cuDNN 9，PyTorch 2.6+ 自带 cuDNN 9）。
+
+6. **`RuntimeError: Weights only load failed`**: PyTorch ≥2.6 更改了 `torch.load` 的默认行为。**解决方案：** 已在 `whisperX_local.py` 中通过猴补丁修复，如果遇到此问题说明代码未正确更新。
+
+7. **Streamlit 中 WhisperX 转录卡住不动（CPU/GPU 均空闲）**: `librosa.load()` 在 Streamlit 的非主线程中死锁。**解决方案：** 已用 `whisperx.audio.load_audio()`（基于 ffmpeg 子进程）替换。如果遇到此问题说明代码未正确更新。
+
+8. **spacy 模型 `Can't find model 'xx_core_web_md'`（但 pip 显示已安装）**: pip 将模型安装到了用户目录而非 conda 环境。**解决方案：** 用管理员权限运行终端，或手动指定 conda 环境的 python 路径安装：
+   ```bash
+   python -m pip install xx-core-web-md --no-user --force-reinstall --no-deps
+   ```
+
+9. **pip 安装后 torchaudio 版本变成 1.x 或 2.1.x**: demucs 的 `torchaudio<2.2` 约束导致降级。**解决方案：** 不要手动 `pip install demucs`，必须用 `--no-deps` 安装。`install.py` 已正确处理。

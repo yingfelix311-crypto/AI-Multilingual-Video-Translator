@@ -5,13 +5,21 @@ VideoLingo requires an LLM and TTS(optional). For the best quality, use claude-3
 
 ### 1. **Get API_KEY for LLM**:
 
-| Recommended Model | Recommended Provider | base_url | Price | Effect |
-|:-----|:---------|:---------|:-----|:---------|
-| claude-3-5-sonnet-20240620 | [yunwu.ai](https://yunwu.ai/register?aff=TXMB) | https://yunwu.ai | $1 / 1M tokens | 🤩 |
-| gpt-4.1 | [yunwu.ai](https://yunwu.ai/register?aff=TXMB) | https://yunwu.ai | $0.5 / 1M tokens | 🤩 |
-| gemini-2.0-flash | [302AI](https://gpt302.saaslink.net/C2oHR9) | https://api.302.ai | $0.3 / 1M tokens | 😃 |
-| deepseek-v3 | [302AI](https://gpt302.saaslink.net/C2oHR9) | https://api.302.ai | $1 / 1M tokens | 🥳 |
-| qwen2.5-coder:32b | [Ollama](https://ollama.ai) | http://localhost:11434 | 0 | 😃 |
+| Recommended Model | Vendor | Quality | Cost-efficiency |
+|:-----|:---------|:-----|:---------|
+| claude-sonnet-4-6 | [Anthropic](https://www.anthropic.com) | 🤩 | ⭐⭐⭐ |
+| claude-opus-4-6 | [Anthropic](https://www.anthropic.com) | 🏆 | ⭐⭐ |
+| gpt-5.2 | [OpenAI](https://openai.com) | 🤩 | ⭐⭐⭐ |
+| gemini-3-flash | [Google](https://ai.google.dev) | 😃 | ⭐⭐⭐⭐⭐ |
+| gemini-3.1-pro | [Google](https://ai.google.dev) | 🤩 | ⭐⭐⭐ |
+| minimax-m2.5 | [MiniMax](https://www.minimax.io) | 😃 | ⭐⭐⭐⭐⭐ |
+| kimi-k2.5 | [Moonshot AI](https://www.moonshot.cn) | 😃 | ⭐⭐⭐⭐ |
+| deepseek-v3 | [DeepSeek](https://www.deepseek.com) | 🥳 | ⭐⭐⭐⭐ |
+| qwen3-32b | [Ollama](https://ollama.ai) self-hosted | 😃 | ♾️ Free |
+
+> **Tip:** Model pricing changes frequently. Check each vendor's website for current rates. [models.dev](https://models.dev) offers cross-vendor price and capability comparison.
+>
+> **API proxy:** If you cannot access overseas APIs directly, [OpenRouter](https://openrouter.ai) is recommended (supports all models above, unified OpenAI-format API, pay-per-use with no monthly fee).
 
 Note: Supports OpenAI format, you can try different models at your risk. However, the process involves multi-step reasoning chains and complex JSON formats, **not recommended to use models smaller than 30B**.
 
@@ -118,15 +126,19 @@ After configuration, select `Reference Audio Mode` in the sidebar (see Yuque doc
 VideoLingo supports Windows, macOS and Linux systems, and can run on CPU or GPU.
 
 > **Note:** To use NVIDIA GPU acceleration on Windows, please complete the following steps first:
-> 1. Install [CUDA Toolkit 12.6](https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.76_windows.exe)
+> 1. Install [CUDA Toolkit 12.6](https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.76_windows.exe) or newer (12.8 / 13.x all work — the install script auto-adapts)
 > 2. Install [CUDNN 9.3.0](https://developer.download.nvidia.com/compute/cudnn/9.3.0/local_installers/cudnn_9.3.0_windows.exe)
 > 3. Add `C:\Program Files\NVIDIA\CUDNN\v9.3\bin\12.6` to your system PATH
 > 4. Restart your computer
+>
+> ⚠️ **Pitfall:** The install script auto-selects the best PyTorch wheel (cu128 / cu126) for your CUDA version. Even on CUDA 13.x, **do NOT manually install cu130/cu131 PyTorch** — this causes ctranslate2 to fail with `cublas64_12.dll not found`.
 
 > **Note:** FFmpeg is required. Please install it via package managers:
 > - Windows: ```choco install ffmpeg``` (via [Chocolatey](https://chocolatey.org/))
 > - macOS: ```brew install ffmpeg``` (via [Homebrew](https://brew.sh/))
 > - Linux: ```sudo apt install ffmpeg``` (Debian/Ubuntu) or ```sudo dnf install ffmpeg``` (Fedora)
+>
+> ⚠️ **Pitfall:** Do NOT use conda-forge ffmpeg (it lacks the libmp3lame encoder). Use the system package manager to install a full build.
 
 Before installing VideoLingo, ensure you have installed Git and Anaconda.
 
@@ -142,10 +154,14 @@ Before installing VideoLingo, ensure you have installed Git and Anaconda.
    conda activate videolingo
    ```
 
+   > ⚠️ **Pitfall:** Make sure pip is using the conda env's site-packages. On Windows, if the `site-packages` directory is not writable (e.g. under `C:\ProgramData\anaconda3\`), pip silently installs to the user directory instead. If this happens, run the terminal as administrator.
+
 3. Run installation script:
    ```bash
    python install.py
    ```
+
+   > ⚠️ **Install order matters:** `install.py` installs dependencies in the correct order: PyTorch first (locks CUDA version), then demucs with `--no-deps` (prevents torchaudio downgrade), then the rest. **Do not rearrange manually.**
 
 4. 🎉 Launch Streamlit app:
    ```bash
@@ -165,7 +181,7 @@ Document: [English](/batch/README.md) | [Chinese](/batch/README.zh.md)
 
 Note: This section is still in early development and may have limited functionality
 
-## 🚨 Common Errors
+## 🚨 Common Errors & Pitfalls
 
 1. **'All array must be of the same length' or 'Key Error' during translation**: 
    - Reason 1: Weaker models have poor JSON format compliance causing response parsing errors.
@@ -175,3 +191,18 @@ Note: This section is still in early development and may have limited functional
 2. **'Retry Failed', 'SSL', 'Connection', 'Timeout'**: Usually network issues. Solution: Users in mainland China please switch network nodes and retry.
 
 3. **local_files_only=True**: Model download failure due to network issues, need to verify network can ping `huggingface.co`.
+
+4. **`cublas64_12.dll not found`**: Installed CUDA 13.x and used cu130/cu131 PyTorch wheels. **Solution:** Must use cu128 or cu126 wheels (`install.py` handles this automatically) because ctranslate2 only supports CUDA 12. Re-run `python install.py`.
+
+5. **Whisper model loading segfaults silently**: ctranslate2 version mismatches cuDNN version. **Solution:** Ensure `ctranslate2>=4.5.0` (supports cuDNN 9, which PyTorch 2.6+ ships with).
+
+6. **`RuntimeError: Weights only load failed`**: PyTorch ≥2.6 changed `torch.load` default behavior. **Solution:** Already fixed via monkey-patch in `whisperX_local.py`. If you see this, your code is not up to date.
+
+7. **WhisperX transcription hangs in Streamlit (CPU/GPU idle)**: `librosa.load()` deadlocks in Streamlit's non-main thread. **Solution:** Already fixed by replacing with `whisperx.audio.load_audio()` (ffmpeg subprocess). If you see this, your code is not up to date.
+
+8. **spacy `Can't find model 'xx_core_web_md'` (but pip says installed)**: pip installed the model to user directory instead of conda env. **Solution:** Run terminal as administrator, or manually install with conda env's python:
+   ```bash
+   python -m pip install xx-core-web-md --no-user --force-reinstall --no-deps
+   ```
+
+9. **torchaudio version drops to 1.x or 2.1.x after pip install**: demucs's `torchaudio<2.2` constraint causes downgrade. **Solution:** Never `pip install demucs` directly — must use `--no-deps`. `install.py` handles this correctly.

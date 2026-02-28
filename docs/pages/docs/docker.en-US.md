@@ -54,7 +54,7 @@ Please replace `/path/to/your/model` with the actual local path where you downlo
 - Base image: nvidia/cuda:12.4.1-devel-ubuntu20.04
 - Python version: 3.10
 - Pre-installed software: git, curl, sudo, ffmpeg, fonts-noto, etc.
-- PyTorch version: 2.0.0 (CUDA 11.8)
+- PyTorch version: 2.8.0 (CUDA 12.8)
 - Exposed port: 8501 (Streamlit application)
 
 For more detailed information, please refer to the Dockerfile.

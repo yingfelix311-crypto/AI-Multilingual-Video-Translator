@@ -57,7 +57,7 @@ docker run -d -p 8501:8501 --gpus all -v /path/to/your/model:/app/_model_cache r
 - 基础镜像: nvidia/cuda:12.4.1-devel-ubuntu20.04
 - Python版本: 3.10
 - 预装软件: git, curl, sudo, ffmpeg, fonts-noto等
-- PyTorch版本: 2.0.0 (CUDA 11.8)
+- PyTorch版本: 2.8.0 (CUDA 12.8)
 - 暴露端口: 8501 (Streamlit应用)
 
 如需更多详细信息,请参考Dockerfile。
