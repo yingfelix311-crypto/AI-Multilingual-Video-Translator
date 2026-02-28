@@ -93,6 +93,44 @@ def check_ffmpeg():
     except Exception:
         pass
 
+def _detect_cuda_index():
+    """Detect the installed CUDA toolkit version and return the best PyTorch
+    wheel index URL.  Falls back to cu126 when detection fails.
+
+    IMPORTANT: We deliberately use CUDA 12.x wheels even on CUDA 13+ systems.
+    ctranslate2 (used by faster-whisper/whisperx) is only compiled for CUDA 12
+    and needs cublas64_12.dll.  CUDA 12.x PyTorch wheels provide this DLL, and
+    NVIDIA drivers are backward-compatible so CUDA 12 code runs fine on a
+    CUDA 13 driver.  Using cu128/cu126 avoids the cublas version mismatch."""
+    import re
+    cuda_version = None
+    try:
+        result = subprocess.run(
+            ["nvcc", "--version"], capture_output=True, text=True, timeout=10
+        )
+        m = re.search(r"release\s+(\d+)\.(\d+)", result.stdout)
+        if m:
+            cuda_version = (int(m.group(1)), int(m.group(2)))
+    except Exception:
+        pass
+
+    # Map CUDA toolkit major.minor to a CUDA 12.x PyTorch wheel index.
+    # PyTorch 2.8.0 (required by whisperx 3.8.1) ships cu126, cu128, cu129.
+    # We prefer cu128 for CUDA >=12.8 (including 13.x) and cu126 otherwise.
+    INDEX = "https://download.pytorch.org/whl"
+    CU_TAGS = [
+        ((12, 8), "cu128"),
+        ((12, 6), "cu126"),
+    ]
+
+    if cuda_version:
+        for min_ver, tag in CU_TAGS:
+            if cuda_version >= min_ver:
+                return f"{INDEX}/{tag}"
+
+    # Default: cu126 is the broadest CUDA 12 index for PyTorch 2.8
+    return f"{INDEX}/cu126"
+
 def main():
     install_package("requests", "rich", "ruamel.yaml", "InquirerPy")
     from rich.console import Console
@@ -141,11 +179,13 @@ def main():
     has_gpu = platform.system() != 'Darwin' and check_nvidia_gpu()
     if has_gpu:
         console.print(Panel(t("🎮 NVIDIA GPU detected, installing CUDA version of PyTorch..."), style="cyan"))
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.6.0", "torchaudio==2.6.0", "--index-url", "https://download.pytorch.org/whl/cu124"])
+        cuda_index = _detect_cuda_index()
+        console.print(f"[cyan]📦 Using PyTorch index:[/cyan] {cuda_index}")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.8.0", "torchaudio==2.8.0", "--index-url", cuda_index])
     else:
         system_name = "🍎 MacOS" if platform.system() == 'Darwin' else "💻 No NVIDIA GPU"
         console.print(Panel(t(f"{system_name} detected, installing CPU version of PyTorch... Note: it might be slow during whisperX transcription."), style="cyan"))
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.6.0", "torchaudio==2.6.0"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.8.0", "torchaudio==2.8.0"])
 
     @except_handler("Failed to install project")
     def install_requirements():
@@ -154,6 +194,10 @@ def main():
         # demucs works fine with torchaudio 2.6.0 at runtime.
         console.print(Panel(t("Installing demucs (--no-deps to avoid torchaudio conflict)..."), style="cyan"))
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-deps", "demucs[dev]@git+https://github.com/adefossez/demucs"])
+        # demucs --no-deps skips its own dependencies; install the ones it
+        # actually needs at runtime that aren't already pulled in elsewhere.
+        console.print(Panel(t("Installing demucs runtime dependencies..."), style="cyan"))
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "dora-search", "openunmix", "lameenc"])
 
         console.print(Panel(t("Installing project in editable mode using `pip install -e .`"), style="cyan"))
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-e", "."], env={**os.environ, "PIP_NO_CACHE_DIR": "0", "PYTHONIOENCODING": "utf-8"})
