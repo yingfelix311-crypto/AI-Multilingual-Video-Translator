@@ -57,7 +57,8 @@ docker run -d -p 8501:8501 --gpus all -v /path/to/your/model:/app/_model_cache r
 - 基础镜像: nvidia/cuda:12.4.1-devel-ubuntu20.04
 - Python版本: 3.10
 - 预装软件: git, curl, sudo, ffmpeg, fonts-noto等
-- PyTorch版本: 2.0.0 (CUDA 11.8)
+- PyTorch版本: 2.8.0 (CUDA 12.8 编译目标)
+  > ⚠️ 这里的 "CUDA 12.8" 指的是 PyTorch 的**编译目标**（cu128 轮子），而非宿主机 CUDA 版本。NVIDIA 驱动向后兼容，因此 CUDA 13.x 宿主机可以正常运行 cu128 轮子。使用 cu128 而非 cu130/cu131 的原因是 ctranslate2（whisperX 的核心依赖）仅为 CUDA 12 编译，需要 `cublas64_12.dll`，只有 cu12x 轮子才包含此文件。
 - 暴露端口: 8501 (Streamlit应用)
 
 如需更多详细信息,请参考Dockerfile。
