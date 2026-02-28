@@ -51,7 +51,6 @@ def check_ffmpeg():
         # Check if ffmpeg is installed
         subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
         console.print(Panel(t("✅ FFmpeg is already installed"), style="green"))
-        return True
     except (subprocess.CalledProcessError, FileNotFoundError):
         system = platform.system()
         install_cmd = ""
@@ -74,6 +73,25 @@ def check_ffmpeg():
             style="red"
         ))
         raise SystemExit(t("FFmpeg is required. Please install it and run the installer again."))
+
+    # Warn if ffmpeg lacks libmp3lame (common with conda-forge builds)
+    try:
+        result = subprocess.run(['ffmpeg', '-encoders'], capture_output=True, text=True, timeout=10)
+        if 'libmp3lame' not in result.stdout:
+            console.print(Panel.fit(
+                "⚠️ Your ffmpeg does not include [bold]libmp3lame[/bold] (MP3 encoder).\n"
+                "This is common with conda-forge ffmpeg builds.\n\n"
+                "VideoLingo will fall back to WAV encoding automatically, but for\n"
+                "smaller intermediate files, consider installing a full ffmpeg:\n\n"
+                "[bold cyan]" + (
+                    "winget install Gyan.FFmpeg" if platform.system() == "Windows"
+                    else "brew install ffmpeg" if platform.system() == "Darwin"
+                    else "sudo apt install ffmpeg"
+                ) + "[/bold cyan]",
+                style="yellow"
+            ))
+    except Exception:
+        pass
 
 def main():
     install_package("requests", "rich", "ruamel.yaml", "InquirerPy")
