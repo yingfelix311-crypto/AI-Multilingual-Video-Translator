@@ -1,7 +1,7 @@
 # 🚀 开始使用
 
 ## 📋 API 配置指南
-本项目需使用大模型和 TTS。追求最佳质量请使用 claude-3-5-sonnet-20240620 与 Azure TTS。也可以选择完全本地化体验，使用 Ollama 作为大模型，Edge TTS 作为配音，无需任何 API key（此时需要在 `config.yaml` 中将 `max_workers` 设为 1，`summary_length` 调低至 2000）。
+本项目需使用大模型和 TTS。追求最佳质量请使用 `claude-sonnet-4.6` 或 `gpt-5.4` 与 Azure TTS。也可以选择完全本地化体验，使用 Ollama 作为大模型，Edge TTS 作为配音，无需任何 API key（此时需要在 `config.yaml` 中将 `max_workers` 设为 1，`summary_length` 调低至 2000）。
 
 ### 1. **大模型的 API_KEY**：
 
@@ -140,6 +140,39 @@ VideoLingo 支持 Windows、macOS 和 Linux 系统，可使用 CPU 或 GPU 运�
 >
 > ⚠️ **踩坑提示:** 不要使用 conda-forge 的 ffmpeg（缺少 libmp3lame 编码器）。建议用系统包管理器安装完整版。
 
+### 方式一：使用 uv（推荐）
+
+[uv](https://docs.astral.sh/uv/) 是一个快速的 Python 包管理器，能自动下载正确版本的 Python 并创建隔离环境。无需手动安装 Python 或 Anaconda（~30 MB vs Anaconda 的 ~4 GB，包安装速度快 10-100 倍）。
+
+1. 克隆项目：
+   ```bash
+   git clone https://github.com/Huanshere/VideoLingo.git
+   cd VideoLingo
+   ```
+
+2. 一键安装（自动安装 uv + Python 3.10 + 所有依赖）：
+   ```bash
+   python setup_env.py
+   ```
+
+   > ⚠️ **安装顺序说明:** `install.py`（由 `setup_env.py` 自动调用）会按正确顺序安装依赖：先装 PyTorch（锁定 CUDA 版本），再用 `--no-deps` 装 demucs（避免 torchaudio 被降级），最后装其余依赖。**不要手动打乱顺序。**
+
+3. 🎉 启动 Streamlit 应用：
+   ```bash
+   .venv\Scripts\streamlit run st.py        # Windows
+   .venv/bin/streamlit run st.py            # macOS / Linux
+   ```
+   或在 Windows 上双击 `OneKeyStart_uv.bat`。
+
+4. 在弹出网页的侧边栏中设置 key，开始使用~
+
+### 方式二：使用 Conda
+
+> ⚠️ **不推荐。** 此方式今后将不再维护，请使用上方的 uv（方式一）。
+
+<details>
+<summary>点击展开 Conda 安装步骤</summary>
+
 开始安装 VideoLingo 之前，请确保安装了 Git 和 Anaconda。
 
 1. 克隆项目：
@@ -169,6 +202,8 @@ VideoLingo 支持 Windows、macOS 和 Linux 系统，可使用 CPU 或 GPU 运�
    ```
 
 5. 在弹出网页的侧边栏中设置key，开始使用~
+
+</details>
 
 
 6. （可选）更多设置可以在 `config.yaml` 中手动修改，运行过程请注意命令行输出。如需使用自定义术语，请在处理前将术语添加到 `custom_terms.xlsx` 中，例如 `Biden | 登子 | 美国的瞌睡总统`。
