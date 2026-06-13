@@ -1,5 +1,16 @@
-import streamlit as st
 import os, sys, time
+
+
+def _configure_utf8_console():
+    """Allow Rich and task threads to print Unicode on Windows."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+_configure_utf8_console()
+
+import streamlit as st
 from core.st_utils.imports_and_utils import *
 from core.st_utils.task_runner import TaskRunner
 from core import *
