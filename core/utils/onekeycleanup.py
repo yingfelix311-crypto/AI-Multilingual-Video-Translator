@@ -1,13 +1,12 @@
 import os
 import glob
-from core._1_ytdlp import find_video_files
+from core._1_ytdlp import find_media_file
 import shutil
 
 def cleanup(history_dir="history"):
-    # Get video file name
-    video_file = find_video_files()
-    video_name = video_file.split("/")[1]
-    video_name = os.path.splitext(video_name)[0]
+    # Get input media file name
+    media_file, _ = find_media_file()
+    video_name = os.path.splitext(os.path.basename(media_file))[0]
     video_name = sanitize_filename(video_name)
     
     # Create required folders

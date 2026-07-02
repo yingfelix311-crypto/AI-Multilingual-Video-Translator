@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 from translations.translations import translate as t
-from translations.translations import DISPLAY_LANGUAGES
 from core.utils import *
 
 
@@ -51,15 +50,6 @@ def page_setting():
         """<style>[data-testid="stSidebar"] {min-width: 420px; max-width: 420px;}</style>""",
         unsafe_allow_html=True,
     )
-
-    display_language = st.selectbox(
-        "Display Language 🌐",
-        options=list(DISPLAY_LANGUAGES.keys()),
-        index=list(DISPLAY_LANGUAGES.values()).index(load_key("display_language")),
-    )
-    if DISPLAY_LANGUAGES[display_language] != load_key("display_language"):
-        update_key("display_language", DISPLAY_LANGUAGES[display_language])
-        st.rerun()
 
     # with st.expander(t("Youtube Settings"), expanded=True):
     #     config_input(t("Cookies Path"), "youtube.cookies_path")
@@ -181,6 +171,11 @@ def page_setting():
             t("WhisperX Runtime"),
             options=["local", "cloud", "elevenlabs"],
             index=["local", "cloud", "elevenlabs"].index(load_key("whisper.runtime")),
+            format_func=lambda x: {
+                "local": t("Local"),
+                "cloud": t("Cloud"),
+                "elevenlabs": t("ElevenLabs"),
+            }[x],
             help=t(
                 "Local runtime requires >8GB GPU, cloud runtime requires 302ai API key, elevenlabs runtime requires ElevenLabs API key"
             ),
@@ -191,7 +186,7 @@ def page_setting():
         if runtime == "cloud":
             config_input(t("WhisperX 302ai API"), "whisper.whisperX_302_api_key")
         if runtime == "elevenlabs":
-            config_input(("ElevenLabs API"), "whisper.elevenlabs_api_key")
+            config_input(t("ElevenLabs API"), "whisper.elevenlabs_api_key")
 
         with c2:
             target_language = st.text_input(
@@ -216,16 +211,26 @@ def page_setting():
             update_key("demucs", demucs)
             st.rerun()
 
-        burn_subtitles = st.toggle(
-            t("Burn-in Subtitles"),
-            value=load_key("burn_subtitles"),
-            help=t(
-                "Whether to burn subtitles into the video, will increase processing time"
-            ),
-        )
-        if burn_subtitles != load_key("burn_subtitles"):
-            update_key("burn_subtitles", burn_subtitles)
-            st.rerun()
+        from core._1_ytdlp import is_audio_only_input
+        audio_only = is_audio_only_input()
+        if audio_only:
+            st.toggle(
+                t("Burn-in Subtitles"),
+                value=False,
+                disabled=True,
+                help=t("Audio-only input produces subtitle files only; no video is generated."),
+            )
+        else:
+            burn_subtitles = st.toggle(
+                t("Burn-in Subtitles"),
+                value=load_key("burn_subtitles"),
+                help=t(
+                    "Whether to burn subtitles into the video, will increase processing time"
+                ),
+            )
+            if burn_subtitles != load_key("burn_subtitles"):
+                update_key("burn_subtitles", burn_subtitles)
+                st.rerun()
     with st.expander(t("Dubbing Settings"), expanded=True):
         tts_methods = [
             "azure_tts",
@@ -238,10 +243,22 @@ def page_setting():
             "sf_cosyvoice2",
             "f5tts",
         ]
+        tts_method_labels = {
+            "azure_tts": t("Azure TTS"),
+            "openai_tts": t("OpenAI TTS"),
+            "fish_tts": t("Fish TTS"),
+            "sf_fish_tts": t("SiliconFlow Fish TTS"),
+            "edge_tts": t("Edge TTS"),
+            "gpt_sovits": t("GPT-SoVITS"),
+            "custom_tts": t("Custom TTS"),
+            "sf_cosyvoice2": t("SiliconFlow CosyVoice2"),
+            "f5tts": t("F5-TTS"),
+        }
         select_tts = st.selectbox(
             t("TTS Method"),
             options=tts_methods,
             index=tts_methods.index(load_key("tts_method")),
+            format_func=lambda x: tts_method_labels[x],
         )
         if select_tts != load_key("tts_method"):
             update_key("tts_method", select_tts)
@@ -269,14 +286,14 @@ def page_setting():
                 update_key("sf_fish_tts.mode", selected_mode)
                 st.rerun()
             if selected_mode == "preset":
-                config_input("Voice", "sf_fish_tts.voice")
+                config_input(t("Voice"), "sf_fish_tts.voice")
 
         elif select_tts == "openai_tts":
-            config_input("302ai API", "openai_tts.api_key")
+            config_input(t("302ai API"), "openai_tts.api_key")
             config_input(t("OpenAI Voice"), "openai_tts.voice")
 
         elif select_tts == "fish_tts":
-            config_input("302ai API", "fish_tts.api_key")
+            config_input(t("302ai API"), "fish_tts.api_key")
             fish_tts_character = st.selectbox(
                 t("Fish TTS Character"),
                 options=list(load_key("fish_tts.character_id_dict").keys()),
@@ -289,7 +306,7 @@ def page_setting():
                 st.rerun()
 
         elif select_tts == "azure_tts":
-            config_input("302ai API", "azure_tts.api_key")
+            config_input(t("302ai API"), "azure_tts.api_key")
             config_input(t("Azure Voice"), "azure_tts.voice")
 
         elif select_tts == "gpt_sovits":
@@ -321,7 +338,7 @@ def page_setting():
             config_input(t("SiliconFlow API Key"), "sf_cosyvoice2.api_key")
 
         elif select_tts == "f5tts":
-            config_input("302ai API", "f5tts.302_api")
+            config_input(t("302ai API"), "f5tts.302_api")
 
 
 def check_api():

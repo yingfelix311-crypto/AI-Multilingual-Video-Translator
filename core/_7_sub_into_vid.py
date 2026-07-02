@@ -41,6 +41,11 @@ def check_gpu_available():
         return False
 
 def merge_subtitles_to_video():
+    from core._1_ytdlp import is_audio_only_input
+    if is_audio_only_input():
+        rprint("[bold green]🎵 Audio-only input: skipping video merge. Subtitle files are ready in the `output` directory.[/bold green]")
+        return
+
     video_file = find_video_files()
     os.makedirs(os.path.dirname(OUTPUT_VIDEO), exist_ok=True)
 

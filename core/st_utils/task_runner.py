@@ -40,8 +40,31 @@ class TaskRunner:
     _thread: threading.Thread | None = None
     _steps: list = field(default_factory=list)
 
+    # Class-level pointer to the currently executing runner so that long-running
+    # core functions can call ``TaskRunner.check_cancel()`` without needing a
+    # direct reference. The pointer is only meaningful inside the background
+    # thread that ``start()`` launches.
+    _current: "TaskRunner | None" = None
+
     def __post_init__(self):
         self._pause_event.set()  # not paused initially
+
+    # ------ Cancellation helpers (called from core code) ------
+
+    @classmethod
+    def check_cancel(cls) -> None:
+        """Block while paused and raise :class:`StopTask` if a stop was requested.
+
+        Safe to call from any thread; becomes a no-op when no runner is active
+        (e.g. when core scripts are invoked from the CLI).
+        """
+        runner = cls._current
+        if runner is None:
+            return
+        # Block while paused so long loops freeze on pause too.
+        runner._pause_event.wait()
+        if runner._stop_event.is_set():
+            raise StopTask()
 
     # ------ Singleton per session_state ------
     @staticmethod
@@ -121,6 +144,7 @@ class TaskRunner:
 
     def _run(self):
         """Execute steps sequentially in background thread."""
+        type(self)._current = self
         try:
             for i, (label, func) in enumerate(self._steps):
                 # Check stop before each step
@@ -141,7 +165,12 @@ class TaskRunner:
                 func()
 
             self.state = "completed"
+        except StopTask:
+            self.state = "stopped"
         except Exception as e:
             self.error_msg = str(e)
             self.state = "error"
             traceback.print_exc()
+        finally:
+            if type(self)._current is self:
+                type(self)._current = None

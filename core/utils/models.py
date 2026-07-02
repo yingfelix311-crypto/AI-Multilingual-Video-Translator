@@ -26,6 +26,13 @@ _AUDIO_SEGS_DIR = "output/audio/segs"
 _AUDIO_TMP_DIR = "output/audio/tmp"
 
 # ------------------------------------------
+# Done markers (written by st.py task runner after a stage finishes
+# cleanly; absence implies the stage did not complete).
+# ------------------------------------------
+_TEXT_DONE_MARKER = "output/.subtitle_done"
+_AUDIO_DONE_MARKER = "output/.dubbing_done"
+
+# ------------------------------------------
 # 导出
 # ------------------------------------------
 
@@ -45,5 +52,7 @@ __all__ = [
     "_BACKGROUND_AUDIO_FILE",
     "_AUDIO_REFERS_DIR",
     "_AUDIO_SEGS_DIR",
-    "_AUDIO_TMP_DIR"
+    "_AUDIO_TMP_DIR",
+    "_TEXT_DONE_MARKER",
+    "_AUDIO_DONE_MARKER",
 ]

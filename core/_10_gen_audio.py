@@ -85,6 +85,7 @@ def generate_tts_audio(tasks_df: pd.DataFrame) -> pd.DataFrame:
         warmup_size = min(WARMUP_SIZE, len(tasks_df))
         for _, row in tasks_df.head(warmup_size).iterrows():
             try:
+                check_cancel()
                 number, real_dur = process_row(row, tasks_df)
                 tasks_df.loc[tasks_df['number'] == number, 'real_dur'] = real_dur
                 progress.advance(task)
@@ -103,14 +104,20 @@ def generate_tts_audio(tasks_df: pd.DataFrame) -> pd.DataFrame:
                     for _, row in remaining_tasks.iterrows()
                 ]
                 
-                for future in as_completed(futures):
-                    try:
-                        number, real_dur = future.result()
-                        tasks_df.loc[tasks_df['number'] == number, 'real_dur'] = real_dur
-                        progress.advance(task)
-                    except Exception as e:
-                        rprint(f"[red]❌ Error: {str(e)}[/red]")
-                        raise e
+                try:
+                    for future in as_completed(futures):
+                        check_cancel()
+                        try:
+                            number, real_dur = future.result()
+                            tasks_df.loc[tasks_df['number'] == number, 'real_dur'] = real_dur
+                            progress.advance(task)
+                        except Exception as e:
+                            rprint(f"[red]❌ Error: {str(e)}[/red]")
+                            raise e
+                except BaseException:
+                    for f in futures:
+                        f.cancel()
+                    raise
 
     rprint("[bold green]✨ TTS audio generation completed![/bold green]")
     return tasks_df
@@ -149,6 +156,7 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
     
     for index, row in tasks_df.iterrows():
         if row['cut_off'] == 1:
+            check_cancel()
             chunk_df = tasks_df.iloc[chunk_start:index+1].reset_index(drop=True)
             speed_factor, keep_gaps = process_chunk(chunk_df, accept, min_speed)
             

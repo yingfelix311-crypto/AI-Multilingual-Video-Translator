@@ -58,6 +58,7 @@ def merge_audio_segments(audios, new_sub_times, sample_rate):
         merge_task = progress.add_task("🎵 Merging audio segments...", total=len(audios))
         
         for i, (audio_file, time_range) in enumerate(zip(audios, new_sub_times)):
+            check_cancel()
             if not os.path.exists(audio_file):
                 console.print(f"[bold yellow]⚠️  Warning: File {audio_file} does not exist, skipping...[/bold yellow]")
                 progress.advance(merge_task)

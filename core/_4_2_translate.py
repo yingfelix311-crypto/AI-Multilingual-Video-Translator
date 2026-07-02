@@ -67,9 +67,15 @@ def translate_all():
                 future = executor.submit(translate_chunk, chunk, chunks, theme_prompt, i)
                 futures.append(future)
             results = []
-            for future in concurrent.futures.as_completed(futures):
-                results.append(future.result())
-                progress.update(task, advance=1)
+            try:
+                for future in concurrent.futures.as_completed(futures):
+                    check_cancel()
+                    results.append(future.result())
+                    progress.update(task, advance=1)
+            except BaseException:
+                for f in futures:
+                    f.cancel()
+                raise
 
     results.sort(key=lambda x: x[0])  # Sort results based on original order
     

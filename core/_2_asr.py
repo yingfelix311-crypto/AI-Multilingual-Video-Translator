@@ -1,14 +1,17 @@
 from core.utils import *
 from core.asr_backend.demucs_vl import demucs_audio
-from core.asr_backend.audio_preprocess import process_transcription, convert_video_to_audio, split_audio, save_results, normalize_audio_volume
-from core._1_ytdlp import find_video_files
+from core.asr_backend.audio_preprocess import process_transcription, convert_video_to_audio, prepare_audio_for_asr, split_audio, save_results, normalize_audio_volume
+from core._1_ytdlp import find_media_file
 from core.utils.models import *
 
 @check_file_exists(_2_CLEANED_CHUNKS)
 def transcribe():
-    # 1. video to audio
-    video_file = find_video_files()
-    convert_video_to_audio(video_file)
+    # 1. prepare audio
+    media_file, media_type = find_media_file()
+    if media_type == "video":
+        convert_video_to_audio(media_file)
+    else:
+        prepare_audio_for_asr(media_file)
 
     # 2. Demucs vocal separation:
     if load_key("demucs"):
@@ -34,6 +37,7 @@ def transcribe():
         rprint("[cyan]🎤 Transcribing audio with ElevenLabs API...[/cyan]")
 
     for start, end in segments:
+        check_cancel()
         result = ts(_RAW_AUDIO_FILE, vocal_audio, start, end)
         all_results.append(result)
     

@@ -26,7 +26,7 @@ def download_subtitle_zip_button(text: str):
     )
 
 # st.markdown
-give_star_button = """
+_GIVE_STAR_BUTTON_TEMPLATE = """
 <style>
     .github-button {
         display: block;
@@ -48,10 +48,14 @@ give_star_button = """
 </style>
 <a href="https://github.com/Huanshere/VideoLingo" target="_blank" style="text-decoration: none;">
     <div class="github-button">
-        Star on GitHub 🌟
+        __STAR_LABEL__
     </div>
 </a>
 """
+
+
+def give_star_button():
+    return _GIVE_STAR_BUTTON_TEMPLATE.replace("__STAR_LABEL__", t("Star on GitHub 🌟"))
 
 button_style = """
 <style>
