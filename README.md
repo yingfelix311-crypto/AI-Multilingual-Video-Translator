@@ -114,8 +114,8 @@ python setup_env.py
 3. Start the application
 
 ```bash
-.venv\Scripts\streamlit run st.py        # Windows
-.venv/bin/streamlit run st.py            # macOS / Linux
+.venv\Scripts\python run_webui.py        # Windows
+.venv/bin/python run_webui.py            # macOS / Linux
 ```
 
 Or double-click `OneKeyStart.bat` on Windows.
@@ -145,7 +145,7 @@ python install.py
 3. Start the application
 
 ```bash
-streamlit run st.py
+python run_webui.py
 ```
 
 </details>

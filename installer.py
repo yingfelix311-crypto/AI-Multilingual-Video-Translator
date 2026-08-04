@@ -357,7 +357,8 @@ def health_check(quiet: bool = False, require_demucs: bool = False, check_state:
         elif not state.get("requirements_hash"):
             errors.append("install state file is missing; rerun installer.py once to enable change detection")
     required = {
-        "streamlit": None,
+        "fastapi": None,
+        "uvicorn": None,
         "openai": None,
         "pandas": None,
         "torch": TORCH_VERSION,
@@ -381,7 +382,7 @@ def health_check(quiet: bool = False, require_demucs: bool = False, check_state:
         errors.append("ffmpeg not found in PATH")
     if not quiet:
         print("\nEnvironment check")
-        for package in ["streamlit", "torch", "torchaudio", "spacy", "whisperx", "demucs"]:
+        for package in ["fastapi", "uvicorn", "torch", "torchaudio", "spacy", "whisperx", "demucs"]:
             print(f"  {package}: {package_version(package) or 'missing'}")
         for warning in warnings:
             print(f"  WARN: {warning}")
@@ -390,10 +391,10 @@ def health_check(quiet: bool = False, require_demucs: bool = False, check_state:
     return 1 if errors else 0
 
 
-def launch_streamlit() -> int:
+def launch_webui() -> int:
     env = os.environ.copy()
     env["PYTHONWARNINGS"] = "ignore"
-    return subprocess.run([sys.executable, "-m", "streamlit", "run", "st.py"], cwd=ROOT, env=env).returncode
+    return subprocess.run([sys.executable, "run_webui.py"], cwd=ROOT, env=env).returncode
 
 
 def install_all(args: argparse.Namespace) -> int:
@@ -413,8 +414,8 @@ def install_all(args: argparse.Namespace) -> int:
     if not ffmpeg_ok or status != 0:
         return 1
     if args.launch:
-        return launch_streamlit()
-    print("\nInstall complete. Start with OneKeyStart.bat or: python -m streamlit run st.py")
+        return launch_webui()
+    print("\nInstall complete. Start with OneKeyStart.bat or: python run_webui.py")
     return 0
 
 

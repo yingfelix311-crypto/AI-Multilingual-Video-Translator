@@ -71,7 +71,7 @@ pause_before_translate: false
 
 ## ======================== Dubbing Settings ======================== ##
 # TTS selection [sf_fish_tts, openai_tts, gpt_sovits, azure_tts, fish_tts, edge_tts, custom_tts, elevenlabs_tts]
-tts_method: 'elevenlabs_tts'
+tts_method: 'custom_tts'
 
 # NoizAI TTS (used by custom_tts)
 # mode: clone = use output/audio/refers/{n}.wav like CosyVoice2; preset = fixed voice_id
@@ -113,7 +113,7 @@ audio_mastering:
   crossfade_ms: 50
   audio_bitrate: '160k'
   original_audio_intervals:
-    - [7.58, 13.30]
+  - [7.58, 13.30]
 
 # SiliconFlow FishTTS
 sf_fish_tts:

@@ -53,4 +53,4 @@ ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
 
 EXPOSE 8501
 
-CMD ["streamlit", "run", "st.py"]
+CMD ["python", "run_webui.py", "--host", "0.0.0.0"]

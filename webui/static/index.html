@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VideoLingo Dubbing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav-inner">
+    <a class="wordmark" href="#top">
+      <span class="wordmark-mark" aria-hidden="true"></span>
+      VideoLingo <span class="wordmark-sub">Dubbing</span>
+    </a>
+    <nav class="nav-links">
+      <a href="#section-input">素材</a>
+      <a href="#section-config">设置</a>
+      <a href="#section-run">运行</a>
+      <a href="#section-speakers">人物</a>
+      <a href="#section-output">成片</a>
+    </nav>
+    <div class="nav-actions">
+      <span class="chip" id="nav-chip" hidden></span>
+      <button class="btn btn-ghost" id="reset-btn">归档并重置</button>
+    </div>
+  </div>
+</header>
+
+<section class="hero" id="top">
+  <div class="hero-mesh" aria-hidden="true"></div>
+  <div class="hero-inner">
+    <p class="eyebrow">DUBBING PIPELINE</p>
+    <h1>用译好的字幕<br>直接生成配音成片</h1>
+    <p class="lead">
+      跳过转写与翻译。上传原视频和译文 SRT，由 LLM 标记人物、逐句克隆原说话人音色，
+      再按 EBU R128 两遍归一化统一整片响度。
+    </p>
+    <div class="hero-stats" id="hero-stats"></div>
+  </div>
+</section>
+
+<main class="container">
+
+  <section class="band" id="section-input">
+    <div class="band-head">
+      <p class="eyebrow">01 / INPUT</p>
+      <h2>输入素材</h2>
+      <p class="band-desc">译文 SRT 是必需的；原文 SRT 可选，缺省时用译文镜像。SRT 超出视频时长的部分会自动截断。</p>
+    </div>
+    <div class="grid grid-3" id="upload-grid"></div>
+  </section>
+
+  <section class="band" id="section-secrets">
+    <div class="band-head">
+      <p class="eyebrow">02 / CREDENTIALS</p>
+      <h2>接口凭证</h2>
+      <p class="band-desc">密钥写入仓库根目录的同名文件（已在 .gitignore 中），不会落进 config.yaml。</p>
+    </div>
+    <div class="grid grid-3" id="secret-grid"></div>
+  </section>
+
+  <section class="band" id="section-config">
+    <div class="band-head">
+      <p class="eyebrow">03 / SETTINGS</p>
+      <h2>配音设置</h2>
+      <p class="band-desc">改动即时写入 config.yaml，下一次运行生效。</p>
+    </div>
+    <div class="grid grid-2" id="config-grid"></div>
+  </section>
+
+  <section class="band" id="section-run">
+    <div class="band-head">
+      <p class="eyebrow">04 / RUN</p>
+      <h2>两阶段运行</h2>
+      <p class="band-desc">准备阶段的人声分离与人物标记结果会被复用，换 TTS 引擎时只需重跑配音阶段。</p>
+    </div>
+    <div class="grid grid-2" id="stage-grid"></div>
+  </section>
+
+  <section class="band" id="section-speakers" hidden>
+    <div class="band-head">
+      <p class="eyebrow">05 / SPEAKERS</p>
+      <h2>人物标记与合并</h2>
+      <p class="band-desc">带合并标记的字幕会与上一条并成一次 TTS 请求，避免同一句话被切开念。</p>
+    </div>
+    <div id="speaker-summary" class="chip-row"></div>
+    <div class="table-wrap">
+      <table class="table" id="speaker-table"></table>
+    </div>
+  </section>
+
+  <section class="band" id="section-tasks" hidden>
+    <div class="band-head">
+      <p class="eyebrow">06 / TASKS</p>
+      <h2>配音任务</h2>
+      <p class="band-desc">每条任务用对应时间戳的人声做参考音频；实际时长与字幕时长的差由变速吸收。</p>
+    </div>
+    <div class="table-wrap">
+      <table class="table" id="task-table"></table>
+    </div>
+  </section>
+
+  <section class="band" id="section-output" hidden>
+    <div class="band-head">
+      <p class="eyebrow">07 / OUTPUT</p>
+      <h2>成片与产物</h2>
+    </div>
+    <div class="output-layout">
+      <div class="card card-flush" id="output-player"></div>
+      <div class="output-side">
+        <div class="card" id="loudness-card"></div>
+        <div class="card" id="artifact-card"></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div>
+      <p class="footer-mark">VideoLingo <span class="wordmark-sub">Dubbing</span></p>
+      <p class="footer-note">译文字幕直配管线 · Gemini 人物标记 · NoizAI / ElevenLabs 克隆 · EBU R128 母带</p>
+    </div>
+    <p class="footer-note" id="footer-engine"></p>
+  </div>
+</footer>
+
+<div class="toasts" id="toasts"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

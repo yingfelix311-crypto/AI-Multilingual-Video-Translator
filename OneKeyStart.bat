@@ -54,11 +54,11 @@ if %errorlevel%==0 (
         if errorlevel 1 goto install_failed
     )
     if defined CHECK_ONLY (
-        echo %C_GREEN%Environment check passed. --check-only set, not starting Streamlit.%C_RESET%
+        echo %C_GREEN%Environment check passed. --check-only set, not starting the web UI.%C_RESET%
         goto end
     )
     echo %C_GREEN%Starting VideoLingo with Conda...%C_RESET%
-    python -m streamlit run st.py 2>&1 | powershell -NoProfile -Command "$input | Tee-Object -FilePath '%LOGFILE%' -Append"
+    python run_webui.py 2>&1 | powershell -NoProfile -Command "$input | Tee-Object -FilePath '%LOGFILE%' -Append"
     goto end
 )
 
@@ -78,12 +78,12 @@ if errorlevel 1 (
 )
 
 if defined CHECK_ONLY (
-    echo %C_GREEN%Environment check passed. --check-only set, not starting Streamlit.%C_RESET%
+    echo %C_GREEN%Environment check passed. --check-only set, not starting the web UI.%C_RESET%
     goto end
 )
 
 echo %C_GREEN%Starting VideoLingo with %VENV_LABEL%...%C_RESET%
-"%VENV_PY%" -m streamlit run st.py 2>&1 | powershell -NoProfile -Command "$input | Tee-Object -FilePath '%LOGFILE%' -Append"
+"%VENV_PY%" run_webui.py 2>&1 | powershell -NoProfile -Command "$input | Tee-Object -FilePath '%LOGFILE%' -Append"
 goto end
 
 :install_failed

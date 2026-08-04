@@ -29,7 +29,7 @@ def main():
     log(f"Python: {sys.version.split()[0]} ({sys.executable})")
 
     # Packages
-    for pkg, imp in [("streamlit", None), ("json_repair", "json_repair")]:
+    for pkg, imp in [("fastapi", None), ("uvicorn", None), ("json_repair", "json_repair")]:
         if not check_package(pkg, imp):
             errors.append(f"{pkg} not installed. Run: python install.py")
 
@@ -53,7 +53,7 @@ def main():
     # Port
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         if s.connect_ex(("127.0.0.1", 8501)) == 0:
-            warnings.append("Port 8501 in use. Close other app or use --server.port 8502")
+            warnings.append("Port 8501 in use. Close other app or use --port 8502")
 
     # Log everything
     for w in warnings:
@@ -75,17 +75,16 @@ def main():
         print()
 
     # Launch
-    log("Launching Streamlit...")
+    log("Launching dubbing web UI...")
     os.environ["PYTHONWARNINGS"] = "ignore"
     try:
         proc = subprocess.run(
-            [sys.executable, "-m", "streamlit", "run", "st.py",
-             "--logger.level", "error"],
+            [sys.executable, "run_webui.py"] + sys.argv[1:],
             cwd=str(SCRIPT_DIR),
         )
         if proc.returncode != 0:
-            log(f"Streamlit exited with code {proc.returncode}")
-            print(f"\n  Streamlit crashed (code {proc.returncode}). See: {LOG_FILE}\n")
+            log(f"Web UI exited with code {proc.returncode}")
+            print(f"\n  Web UI crashed (code {proc.returncode}). See: {LOG_FILE}\n")
             sys.exit(proc.returncode)
     except KeyboardInterrupt:
         log("Stopped by user")

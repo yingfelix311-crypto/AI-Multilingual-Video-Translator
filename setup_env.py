@@ -174,8 +174,8 @@ def main() -> None:
     if platform.system() == "Windows":
         print("  Start with: OneKeyStart.bat")
     else:
-        streamlit = venv_bin(target) / "streamlit"
-        print(f"  Start with: {streamlit} run st.py")
+        python_bin = venv_bin(target) / "python"
+        print(f"  Start with: {python_bin} run_webui.py")
 
 
 if __name__ == "__main__":
