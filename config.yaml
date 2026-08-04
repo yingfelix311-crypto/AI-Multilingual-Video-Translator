@@ -99,10 +99,12 @@ elevenlabs_tts:
   max_workers: 4
 
 # LLM speaker/utterance tagging for SRT dubbing
+# merge_with_previous + tts_merge_max_gap control both reference pooling and TTS source merge
 speaker_tagging:
   enabled: true
   min_confidence: 0.8
-  max_gap: 1.0
+  max_gap: 2  # legacy fallback only; prefer tts_merge_max_gap
+  tts_merge_max_gap: 1.0
 
 # Final audio mastering and original-audio passthrough
 audio_mastering:
@@ -111,9 +113,19 @@ audio_mastering:
   true_peak: -1.0
   loudness_range: 11.0
   crossfade_ms: 50
-  audio_bitrate: '160k'
-  original_audio_intervals:
-  - [7.58, 13.30]
+  audio_bitrate: '256k'
+  background_ducking: true
+  ducking_threshold: 0.03
+  ducking_ratio: 6.0
+  ducking_attack_ms: 20
+  ducking_release_ms: 250
+  preserve_original_vocals_in_gaps: true
+  # Guard against ASR boundary drift so original speech tails stay muted
+  gap_vocals_guard_ms: 250
+  gap_vocals_merge_ms: 400
+  gap_vocals_min_duration_ms: 700
+  gap_vocals_gain: 0.8
+  original_audio_intervals: []
 
 # SiliconFlow FishTTS
 sf_fish_tts:

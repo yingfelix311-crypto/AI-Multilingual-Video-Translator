@@ -12,13 +12,15 @@ import re
 import shutil
 from pathlib import Path
 
-from fastapi import Body, FastAPI, File, HTTPException, UploadFile
+from typing import List, Optional
+
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from core._1_ytdlp import GENERATED_AUDIO_NAMES, write_input_manifest
 from core.utils.config_utils import load_key
-from webui import jobs, pipeline, workspace
+from webui import editing, jobs, pipeline, workspace
 
 STATIC_DIR = Path(__file__).parent / "static"
 OUTPUT_DIR = Path("output")
@@ -197,3 +199,147 @@ def reset_workspace():
         return workspace.read_state()
 
     return _guard(action)
+
+
+# ------------
+# Speaker editing
+# ------------
+
+
+@app.post("/api/speakers/validate")
+def validate_speakers(payload=Body(...)):
+    body = payload or {}
+    if body.get("cues") is not None:
+        media = workspace.read_media()
+        duration = media.get("duration") if media else None
+        return _guard(lambda: editing.validate_cue_items(body.get("cues"), duration))
+    return _guard(lambda: {"items": editing.validate_speaker_items(body.get("items"))})
+
+
+@app.post("/api/speakers/apply")
+def apply_speakers(payload=Body(...)):
+    def action():
+        body = payload or {}
+        cues = body.get("cues")
+        if cues is not None:
+            media = workspace.read_media()
+            duration = media.get("duration") if media else None
+            editing.validate_cue_items(cues, duration)
+            return jobs.start(
+                "rebuild_speakers",
+                pipeline.rebuild_cues_steps(cues, media_duration=duration),
+            )
+        items = body.get("items")
+        # Validate synchronously so the UI gets immediate field errors.
+        editing.validate_speaker_items(items)
+        return jobs.start("rebuild_speakers", pipeline.rebuild_speakers_steps(items))
+
+    return _guard(action)
+
+
+# ------------
+# Reference overrides & selective dub
+# ------------
+
+
+@app.get("/api/tasks/reference/library")
+def reference_library():
+    return _guard(editing.list_reference_library)
+
+
+@app.post("/api/tasks/reference")
+async def upload_reference(
+    files: List[UploadFile] = File(...),
+    numbers: Optional[str] = Form(None),
+    mode: str = Form("broadcast"),
+):
+    task_numbers = []
+    if numbers:
+        task_numbers = [int(part) for part in numbers.split(",") if part.strip()]
+    payloads = []
+    names = []
+    for upload in files:
+        payloads.append(await upload.read())
+        names.append(upload.filename or "")
+    return _guard(
+        lambda: editing.set_reference_overrides(task_numbers, payloads, names, mode=mode)
+    )
+
+
+@app.post("/api/tasks/reference/copy")
+def copy_reference(payload=Body(...)):
+    body = payload or {}
+    return _guard(
+        lambda: editing.copy_reference_from_task(body.get("source"), body.get("numbers") or [])
+    )
+
+
+@app.post("/api/tasks/reference/clear")
+def clear_reference(payload=Body(...)):
+    return _guard(lambda: editing.clear_reference_overrides((payload or {}).get("numbers") or []))
+
+
+@app.patch("/api/tasks/text")
+def patch_task_text(payload=Body(...)):
+    body = payload or {}
+    return _guard(lambda: editing.update_task_text(body.get("number"), body.get("text")))
+
+
+@app.post("/api/jobs/regenerate")
+def regenerate_selected(payload=Body(...)):
+    def action():
+        numbers = editing.validate_task_numbers((payload or {}).get("numbers") or [])
+        return jobs.start("regenerate", pipeline.selective_dub_steps(numbers))
+
+    return _guard(action)
+
+
+@app.post("/api/jobs/candidate")
+def generate_candidate(payload=Body(...)):
+    def action():
+        body = payload or {}
+        number = body.get("number")
+        if number is None:
+            raise ValueError("请提供任务编号")
+        count = int(body.get("count") or 1)
+        return jobs.start(
+            "candidate",
+            pipeline.candidate_steps(
+                number,
+                count=count,
+                force_shorten=bool(body.get("force_shorten", False)),
+            ),
+        )
+
+    return _guard(action)
+
+
+@app.post("/api/tasks/candidate/accept")
+def accept_candidate(payload=Body(...)):
+    body = payload or {}
+    return _guard(
+        lambda: editing.accept_candidate(
+            body.get("number"),
+            body.get("candidate_id"),
+        )
+    )
+
+
+@app.post("/api/tasks/candidate/discard")
+def discard_candidate(payload=Body(...)):
+    def action():
+        number = (payload or {}).get("number")
+        if number is None:
+            raise ValueError("请提供任务编号")
+        editing.validate_task_numbers([number])
+        return editing.discard_candidate(
+            number,
+            (payload or {}).get("candidate_id"),
+        )
+
+    return _guard(action)
+
+
+@app.post("/api/jobs/remaster")
+def remaster_pending():
+    return _guard(lambda: jobs.start("remaster", pipeline.remaster_steps()))

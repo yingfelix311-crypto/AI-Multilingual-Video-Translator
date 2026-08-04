@@ -1,7 +1,9 @@
 import os
+import re
 import time
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Tuple
 
 import pandas as pd
@@ -153,74 +155,415 @@ def process_chunk(chunk_df: pd.DataFrame, accept: float, min_speed: float) -> tu
         
     return round(speed_factor, 3), keep_gaps
 
+def _task_window(tasks_df, index, row):
+    start = parse_df_srt_time(row["start_time"])
+    end = parse_df_srt_time(row["end_time"])
+    tolerance = max(0.0, float(row.get("tolerance", 0) or 0))
+    window_end = end + tolerance
+    if index < len(tasks_df) - 1:
+        next_start = parse_df_srt_time(tasks_df.iloc[index + 1]["start_time"])
+        window_end = min(window_end, next_start)
+    return start, window_end
+
+
+MAX_SHORTEN_ROUNDS = 1
+
+
+def measure_temp_duration(temp_dir, number, line_count):
+    real_dur = 0.0
+    for line_index in range(line_count):
+        temp_file = os.path.join(temp_dir, f"{number}_{line_index}_temp.wav")
+        real_dur += get_audio_duration(temp_file)
+    return max(0.001, real_dur)
+
+
+def fit_task_to_window(tasks_df, index, row, temp_dir, seg_dir, number=None, write_segs=True):
+    """Fit one task's temp WAV files into its anchored subtitle window.
+
+    Never trims speech. Speed is capped at ``speed_factor.max``; if audio still
+    overflows the window, segments are written anyway (forced merge).
+    """
+    number = int(row["number"] if number is None else number)
+    start, window_end = _task_window(tasks_df, index, row)
+    available = max(0.1, window_end - start)
+    max_speed = float(load_key("speed_factor.max"))
+    lines = eval(row["lines"]) if isinstance(row["lines"], str) else row["lines"]
+    line_count = len(lines)
+    real_dur = measure_temp_duration(temp_dir, number, line_count)
+
+    usable = max(0.1, available - 0.05)
+    required_speed = real_dur / usable
+    fits = required_speed <= max_speed + 1e-6
+    speed_factor = min(max_speed, max(1.0, required_speed))
+    overflow = max(0.0, real_dur / max_speed - usable) if not fits else 0.0
+    new_sub_times = []
+
+    if write_segs:
+        os.makedirs(seg_dir, exist_ok=True)
+        cur_time = start
+        for line_index in range(line_count):
+            temp_file = os.path.join(temp_dir, f"{number}_{line_index}_temp.wav")
+            output_file = os.path.join(seg_dir, f"{number}_{line_index}.wav")
+            adjust_audio_speed(temp_file, output_file, speed_factor)
+            ad_dur = get_audio_duration(output_file)
+            new_sub_times.append([cur_time, cur_time + ad_dur])
+            cur_time += ad_dur
+
+    status = "fitted" if fits else "forced_merge"
+    if not fits:
+        rprint(
+            f"[yellow]Task #{number} exceeds its window by {overflow:.3f}s "
+            f"even at max speed {max_speed:.2f}x; forcing merge without trim[/yellow]"
+        )
+
+    rprint(
+        f"[cyan]Task #{number} anchored at {start:.3f}s, "
+        f"window={available:.3f}s, required={required_speed:.3f}x, "
+        f"speed={speed_factor:.3f}, status={status}[/cyan]"
+    )
+
+    return {
+        "number": number,
+        "real_dur": real_dur,
+        "new_sub_times": new_sub_times,
+        "speed_factor": speed_factor,
+        "required_speed": required_speed,
+        "available": available,
+        "max_speed": max_speed,
+        "fits": fits,
+        "overflow": overflow,
+        "line_count": line_count,
+        "status": status,
+    }
+
+
 def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
-    """Merge audio chunks and adjust timeline"""
-    rprint("[bold blue]🔄 Starting audio chunks processing...[/bold blue]")
-    accept = load_key("speed_factor.accept")
-    min_speed = load_key("speed_factor.min")
-    chunk_start = 0
-    
-    tasks_df['new_sub_times'] = None
-    
+    """Fit every TTS task into its own anchored subtitle window.
+
+    The previous chunk scheduler packed short TTS output toward the start of a
+    chunk. A long merged task could therefore pull every following task several
+    seconds earlier. Each row now starts at its original ``start_time``; unused
+    room becomes silence and can never move the next task. Tasks that still
+    overflow after max speed are force-merged (may overlap the next gap).
+    """
+    rprint("[bold blue]🔄 Anchoring TTS audio to original subtitle timestamps...[/bold blue]")
+    # Object dtype is required: assigning nested lists via .at into a missing/
+    # numeric column raises "Must have equal len keys and value...".
+    tasks_df["new_sub_times"] = pd.Series([None] * len(tasks_df), dtype=object)
+    overflows = []
+
     for index, row in tasks_df.iterrows():
-        if row['cut_off'] == 1:
-            check_cancel()
-            chunk_df = tasks_df.iloc[chunk_start:index+1].reset_index(drop=True)
-            speed_factor, keep_gaps = process_chunk(chunk_df, accept, min_speed)
-            
-            # 🎯 Step1: Start processing new timeline
-            chunk_start_time = parse_df_srt_time(chunk_df.iloc[0]['start_time'])
-            chunk_end_time = parse_df_srt_time(chunk_df.iloc[-1]['end_time']) + chunk_df.iloc[-1]['tolerance'] # 加上tolerance才是这一块的结束
-            cur_time = chunk_start_time
-            for i, row in chunk_df.iterrows():
-                # If i is not 0, which is not the first row of the chunk, cur_time needs to be added with the gap of the previous row, remember to divide by speed_factor
-                if i != 0 and keep_gaps:
-                    cur_time += chunk_df.iloc[i-1]['gap']/speed_factor
-                new_sub_times = []
-                number = row['number']
-                lines = eval(row['lines']) if isinstance(row['lines'], str) else row['lines']
-                for line_index, line in enumerate(lines):
-                    # 🔄 Step2: Start speed change and save as OUTPUT_FILE_TEMPLATE
-                    temp_file = TEMP_FILE_TEMPLATE.format(f"{number}_{line_index}")
-                    output_file = OUTPUT_FILE_TEMPLATE.format(f"{number}_{line_index}")
-                    adjust_audio_speed(temp_file, output_file, speed_factor)
-                    ad_dur = get_audio_duration(output_file)
-                    new_sub_times.append([cur_time, cur_time+ad_dur])
-                    cur_time += ad_dur
-                # 🔄 Step3: Find corresponding main DataFrame index and update new_sub_times
-                main_df_idx = tasks_df[tasks_df['number'] == row['number']].index[0]
-                tasks_df.at[main_df_idx, 'new_sub_times'] = new_sub_times
-                # 🎯 Step4: Choose emoji based on speed_factor and accept comparison
-                emoji = "⚡" if speed_factor <= accept else "⚠️"
-                rprint(f"[cyan]{emoji} Processed chunk {chunk_start} to {index} with speed factor {speed_factor}[/cyan]")
-            # 🔄 Step5: Check if the last row exceeds the range
-            if cur_time > chunk_end_time:
-                time_diff = cur_time - chunk_end_time
-                if time_diff <= 0.6:  # If exceeding time is within 0.6 seconds, truncate the last audio
-                    rprint(f"[yellow]⚠️ Chunk {chunk_start} to {index} exceeds by {time_diff:.3f}s, truncating last audio[/yellow]")
-                    # Get the last audio file
-                    last_number = tasks_df.iloc[index]['number']
-                    last_lines = eval(tasks_df.iloc[index]['lines']) if isinstance(tasks_df.iloc[index]['lines'], str) else tasks_df.iloc[index]['lines']
-                    last_line_index = len(last_lines) - 1
-                    last_file = OUTPUT_FILE_TEMPLATE.format(f"{last_number}_{last_line_index}")
-                    
-                    # Calculate the duration to keep
-                    audio = AudioSegment.from_wav(last_file)
-                    original_duration = len(audio) / 1000  # Convert to seconds
-                    new_duration = original_duration - time_diff
-                    trimmed_audio = audio[:(new_duration * 1000)]  # pydub uses milliseconds
-                    trimmed_audio.export(last_file, format="wav")
-                    
-                    # Update the last timestamp
-                    last_times = tasks_df.at[index, 'new_sub_times']
-                    last_times[-1][1] = chunk_end_time
-                    tasks_df.at[index, 'new_sub_times'] = last_times
-                else:
-                    raise Exception(f"Chunk {chunk_start} to {index} exceeds the chunk end time {chunk_end_time:.2f} seconds with current time {cur_time:.2f} seconds")
-            chunk_start = index+1
-    
-    rprint("[bold green]✅ Audio chunks processing completed![/bold green]")
+        check_cancel()
+        number = int(row["number"])
+        result = fit_task_to_window(
+            tasks_df, index, row, _AUDIO_TMP_DIR, _AUDIO_SEGS_DIR, number=number
+        )
+        tasks_df.at[index, "real_dur"] = result["real_dur"]
+        # Store as string so Excel round-trips keep every row (None/NaN breaks merge).
+        tasks_df.at[index, "new_sub_times"] = str(result["new_sub_times"])
+        if not result["fits"]:
+            overflows.append(number)
+
+    if overflows:
+        rprint(
+            f"[bold yellow]⚠️ Forced merge for tasks exceeding max speed window: "
+            f"{overflows}[/bold yellow]"
+        )
+
+    rprint("[bold green]✅ Timestamp-anchored audio processing completed![/bold green]")
     return tasks_df
+
+
+def _parse_source_numbers(row):
+    source = row.get("source_numbers")
+    if isinstance(source, str):
+        try:
+            source = eval(source)
+        except Exception:
+            source = [row["number"]]
+    if not isinstance(source, (list, tuple)) or not source:
+        source = [row["number"]]
+    return [int(n) for n in source]
+
+
+def _task_cue_payload(row, available):
+    """Build per-cue shorten inputs from the current translated SRT."""
+    from webui.workspace import SRC_SRT, TRANS_SRT, parse_srt
+
+    source_numbers = _parse_source_numbers(row)
+    trans_by_cue = {cue["cue"]: cue for cue in parse_srt(TRANS_SRT)}
+    src_by_cue = {cue["cue"]: cue["text"] for cue in parse_srt(SRC_SRT)}
+    missing = [n for n in source_numbers if n not in trans_by_cue]
+    if missing:
+        raise ValueError(f"Task cues missing from translated SRT: {missing}")
+
+    task_text = " ".join(str(row.get("text") or "").split()).strip()
+    srt_task_text = " ".join(trans_by_cue[n]["text"] for n in source_numbers)
+    srt_task_text = re.sub(r"\([^)]*\)|（[^）]*）", "", srt_task_text)
+    srt_task_text = " ".join(srt_task_text.replace("-", "").split()).strip()
+    manual_flag = row.get("manual_text_override", False)
+    manual_override = (
+        manual_flag is True
+        or str(manual_flag).strip().lower() == "true"
+        or task_text != srt_task_text
+    )
+    if manual_override:
+        return [{
+            "cue": int(row["number"]),
+            "text": task_text,
+            "origin": str(row.get("origin") or ""),
+            "budget": round(available, 3),
+            "writeback": False,
+        }]
+
+    cues = []
+    total_budget = 0.0
+    for number in source_numbers:
+        cue = trans_by_cue[number]
+        start = parse_df_srt_time(cue["start"].replace(",", "."))
+        end = parse_df_srt_time(cue["end"].replace(",", "."))
+        budget = max(0.05, end - start)
+        total_budget += budget
+        cues.append({
+            "cue": number,
+            "text": cue["text"],
+            "origin": src_by_cue.get(number, ""),
+            "budget": budget,
+            "writeback": True,
+        })
+
+    if total_budget > 0:
+        scale = available / total_budget
+        for cue in cues:
+            cue["budget"] = round(cue["budget"] * scale, 3)
+    return cues
+
+
+def _validate_shortened_cues(previous, response):
+    if not isinstance(response, dict) or not isinstance(response.get("cues"), list):
+        raise ValueError("LLM shorten response missing cues list")
+    previous_by_cue = {item["cue"]: item for item in previous}
+    expected = [item["cue"] for item in previous]
+    actual = []
+    cleaned = []
+    for raw in response["cues"]:
+        if not isinstance(raw, dict):
+            raise ValueError("Each shortened cue must be an object")
+        cue = int(raw["cue"])
+        text = " ".join(str(raw.get("text") or "").split()).strip()
+        if not text:
+            raise ValueError(f"Shortened cue {cue} is empty")
+        prior = previous_by_cue.get(cue)
+        if prior is None:
+            raise ValueError(f"Unexpected shortened cue id: {cue}")
+        if len(text) > len(prior["text"]):
+            raise ValueError(f"Shortened cue {cue} is longer than previous text")
+        actual.append(cue)
+        cleaned.append({
+            "cue": cue,
+            "text": text,
+            "origin": prior.get("origin", ""),
+            "budget": prior.get("budget", 0),
+            "writeback": prior.get("writeback", True),
+        })
+    if actual != expected:
+        raise ValueError(f"Shortened cue ids mismatch: expected {expected}, got {actual}")
+    if [item["text"] for item in cleaned] == [item["text"] for item in previous]:
+        raise ValueError("LLM did not shorten any cue")
+    return cleaned
+
+
+def shorten_task_cues(cues, available, real_dur, max_speed, round_index):
+    from core.prompts import get_cue_shorten_prompt
+
+    prompt = get_cue_shorten_prompt(
+        cues, available, real_dur, max_speed, round_index, MAX_SHORTEN_ROUNDS
+    )
+
+    def valid_shorten(response):
+        try:
+            _validate_shortened_cues(cues, response)
+        except ValueError as exc:
+            return {"status": "error", "message": str(exc)}
+        return {"status": "success", "message": ""}
+
+    response = ask_gpt(prompt, resp_type="json", log_title="cue_shorten", valid_def=valid_shorten)
+    return _validate_shortened_cues(cues, response)
+
+
+def _lines_from_cues(row, cues):
+    texts = [item["text"] for item in cues]
+    if "speaker" in row and pd.notna(row.get("speaker")):
+        return [" ".join(texts)]
+    return texts
+
+
+def generate_task_candidate(task_number, candidate_id=None, force_shorten=False):
+    """Generate a non-destructive candidate for one task.
+
+    Writes temp audio under ``regeneration_candidates/<number>/``. When the
+    spoken audio exceeds the max-speed window, LLM-shortens cues at most once
+    and regenerates. If it still overflows, segments are force-written at max
+    speed (no speech trim).
+    """
+    import json
+
+    number = int(task_number)
+    tasks_df = pd.read_excel(_8_1_AUDIO_TASK)
+    matches = tasks_df.index[tasks_df["number"] == number].tolist()
+    if not matches:
+        raise ValueError(f"Unknown task number: {number}")
+    index = matches[0]
+    row = tasks_df.loc[index].copy()
+
+    task_root = Path(_AUDIO_CANDIDATES_DIR) / str(number)
+    candidate_id = str(candidate_id).strip() if candidate_id is not None else None
+    candidate_root = task_root / candidate_id if candidate_id else task_root
+    temp_dir = candidate_root / "tmp"
+    seg_dir = candidate_root / "segs"
+    if candidate_root.exists():
+        shutil.rmtree(candidate_root)
+    temp_dir.mkdir(parents=True)
+    seg_dir.mkdir(parents=True)
+
+    start, window_end = _task_window(tasks_df, index, row)
+    available = max(0.1, window_end - start)
+    original_cues = _task_cue_payload(row, available)
+    current_cues = [dict(item) for item in original_cues]
+    lines = _lines_from_cues(row, current_cues)
+    row["lines"] = lines
+    row["text"] = " ".join(item["text"] for item in current_cues)
+
+    rprint(f"[bold magenta]♻️ Generating candidate for task #{number}[/bold magenta]")
+    fit = None
+    rounds_used = 0
+    for round_index in range(MAX_SHORTEN_ROUNDS + 1):
+        check_cancel()
+        for path in temp_dir.glob(f"{number}_*_temp.wav"):
+            path.unlink(missing_ok=True)
+        for path in seg_dir.glob(f"{number}_*.wav"):
+            path.unlink(missing_ok=True)
+
+        for line_index, line in enumerate(lines):
+            check_cancel()
+            temp_file = str(temp_dir / f"{number}_{line_index}_temp.wav")
+            tts_main(line, temp_file, number, tasks_df)
+
+        fit = fit_task_to_window(
+            tasks_df, index, row, str(temp_dir), str(seg_dir), number=number, write_segs=True
+        )
+        force_this_round = bool(force_shorten) and round_index == 0
+        if fit["fits"] and not force_this_round:
+            break
+        if round_index >= MAX_SHORTEN_ROUNDS:
+            break
+
+        rounds_used = round_index + 1
+        rprint(
+            f"[yellow]Task #{number} shorten round {rounds_used}/{MAX_SHORTEN_ROUNDS}[/yellow]"
+        )
+        current_cues = shorten_task_cues(
+            current_cues,
+            fit["available"],
+            fit["real_dur"],
+            fit["max_speed"],
+            rounds_used,
+        )
+        lines = _lines_from_cues(row, current_cues)
+        row["lines"] = lines
+        row["text"] = " ".join(item["text"] for item in current_cues)
+
+    text_changed = [item["text"] for item in current_cues] != [item["text"] for item in original_cues]
+    manifest = {
+        "number": number,
+        "candidate_id": candidate_id,
+        "force_shorten": bool(force_shorten),
+        "line_count": fit["line_count"],
+        "real_dur": round(float(fit["real_dur"]), 3),
+        "available": round(float(fit["available"]), 3),
+        "required_speed": round(float(fit["required_speed"]), 3),
+        "speed_factor": round(float(fit["speed_factor"]), 3),
+        "new_sub_times": fit["new_sub_times"],
+        "fits": bool(fit["fits"]),
+        "status": fit["status"],
+        "overflow": round(float(fit["overflow"]), 3),
+        "shorten_rounds": rounds_used,
+        "text_changed": text_changed,
+        "original_text": " ".join(item["text"] for item in original_cues),
+        "candidate_text": " ".join(item["text"] for item in current_cues),
+        "original_cues": original_cues,
+        "candidate_cues": current_cues,
+        "writeback_subtitles": all(
+            item.get("writeback", True) for item in current_cues
+        ),
+        "source_numbers": _parse_source_numbers(row),
+        "created_at": time.time(),
+        "failure_reason": None if fit["fits"] else (
+            f"After {rounds_used} shorten round(s), audio still exceeds the "
+            f"{fit['max_speed']:.2f}x window by {fit['overflow']:.3f}s; "
+            f"forced merge at max speed"
+        ),
+    }
+    (candidate_root / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    if fit["fits"]:
+        rprint(f"[bold green]Candidate ready for task #{number}[/bold green]")
+    else:
+        rprint(
+            f"[bold yellow]Candidate for task #{number} force-merged "
+            f"(still over window)[/bold yellow]"
+        )
+    return manifest
+
+def _clear_task_temps(tasks_df, numbers=None):
+    """Delete temp TTS files for the given task numbers (or all tasks)."""
+    target = set(int(n) for n in numbers) if numbers is not None else None
+    cleared = 0
+    for _, row in tasks_df.iterrows():
+        number = int(row["number"])
+        if target is not None and number not in target:
+            continue
+        lines = eval(row["lines"]) if isinstance(row["lines"], str) else row["lines"]
+        for line_index in range(len(lines)):
+            temp_file = TEMP_FILE_TEMPLATE.format(f"{number}_{line_index}")
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+                cleared += 1
+    return cleared
+
+
+def regenerate_tasks(task_numbers):
+    """Regenerate TTS for selected tasks, then rebuild the full timeline.
+
+    Selected temps are force-cleared. Any other tasks that already lost their
+    cache (e.g. after a speaker rebuild) are filled back in too — ``tts_main``
+    skips existing files, so untouched caches never hit the TTS API.
+    """
+    numbers = sorted({int(n) for n in task_numbers})
+    if not numbers:
+        raise ValueError("No task numbers provided for regeneration")
+
+    rprint(f"[bold magenta]♻️ Regenerating TTS for tasks: {numbers}[/bold magenta]")
+    os.makedirs(_AUDIO_TMP_DIR, exist_ok=True)
+    os.makedirs(_AUDIO_SEGS_DIR, exist_ok=True)
+
+    tasks_df = pd.read_excel(_8_1_AUDIO_TASK)
+    available = set(int(n) for n in tasks_df["number"].tolist())
+    missing = [n for n in numbers if n not in available]
+    if missing:
+        raise ValueError(f"Unknown task numbers: {missing}")
+
+    cleared = _clear_task_temps(tasks_df, numbers)
+    rprint(f"[yellow]Cleared {cleared} cached TTS files for selected tasks[/yellow]")
+
+    # generate_tts_audio only calls the API when a temp file is missing.
+    tasks_df = generate_tts_audio(tasks_df)
+    tasks_df = merge_chunks(tasks_df)
+    tasks_df.to_excel(_8_1_AUDIO_TASK, index=False)
+    rprint(f"[bold green]Selected TTS regeneration complete ({len(numbers)} forced)[/bold green]")
+    return {"regenerated": numbers}
+
 
 def gen_audio(force=False):
     """Main function: Generate audio and process timeline"""
@@ -235,13 +578,8 @@ def gen_audio(force=False):
     rprint("[green]📊 Loaded task file successfully[/green]")
 
     if force:
-        for _, row in tasks_df.iterrows():
-            lines = eval(row["lines"]) if isinstance(row["lines"], str) else row["lines"]
-            for line_index in range(len(lines)):
-                temp_file = TEMP_FILE_TEMPLATE.format(f"{row['number']}_{line_index}")
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-        rprint("[yellow]♻️ Existing TTS cache cleared for forced regeneration[/yellow]")
+        cleared = _clear_task_temps(tasks_df)
+        rprint(f"[yellow]♻️ Existing TTS cache cleared for forced regeneration ({cleared} files)[/yellow]")
     
     # 🔊 Step3: Generate TTS audio
     tasks_df = generate_tts_audio(tasks_df)

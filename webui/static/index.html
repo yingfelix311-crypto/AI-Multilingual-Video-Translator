@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>VideoLingo Dubbing</title>
+<meta name="color-scheme" content="light">
+<title>Noiz Dubbing</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -11,13 +12,15 @@
 </head>
 <body>
 
+<a class="skip-link" href="#main">跳到主内容</a>
+
 <header class="nav">
   <div class="nav-inner">
     <a class="wordmark" href="#top">
       <span class="wordmark-mark" aria-hidden="true"></span>
-      VideoLingo <span class="wordmark-sub">Dubbing</span>
+      Noiz <span class="wordmark-sub">Dubbing</span>
     </a>
-    <nav class="nav-links">
+    <nav class="nav-links" id="nav-links" aria-label="页面区块">
       <a href="#section-input">素材</a>
       <a href="#section-config">设置</a>
       <a href="#section-run">运行</a>
@@ -44,12 +47,11 @@
   </div>
 </section>
 
-<main class="container">
+<main class="container" id="main">
 
   <section class="band" id="section-input">
     <div class="band-head">
-      <p class="eyebrow">01 / INPUT</p>
-      <h2>输入素材</h2>
+      <h2><span class="band-step" aria-hidden="true">01</span>输入素材</h2>
       <p class="band-desc">译文 SRT 是必需的；原文 SRT 可选，缺省时用译文镜像。SRT 超出视频时长的部分会自动截断。</p>
     </div>
     <div class="grid grid-3" id="upload-grid"></div>
@@ -57,8 +59,7 @@
 
   <section class="band" id="section-secrets">
     <div class="band-head">
-      <p class="eyebrow">02 / CREDENTIALS</p>
-      <h2>接口凭证</h2>
+      <h2><span class="band-step" aria-hidden="true">02</span>接口凭证</h2>
       <p class="band-desc">密钥写入仓库根目录的同名文件（已在 .gitignore 中），不会落进 config.yaml。</p>
     </div>
     <div class="grid grid-3" id="secret-grid"></div>
@@ -66,17 +67,15 @@
 
   <section class="band" id="section-config">
     <div class="band-head">
-      <p class="eyebrow">03 / SETTINGS</p>
-      <h2>配音设置</h2>
+      <h2><span class="band-step" aria-hidden="true">03</span>配音设置</h2>
       <p class="band-desc">改动即时写入 config.yaml，下一次运行生效。</p>
     </div>
-    <div class="grid grid-2" id="config-grid"></div>
+    <div class="masonry" id="config-grid"></div>
   </section>
 
   <section class="band" id="section-run">
     <div class="band-head">
-      <p class="eyebrow">04 / RUN</p>
-      <h2>两阶段运行</h2>
+      <h2><span class="band-step" aria-hidden="true">04</span>两阶段运行</h2>
       <p class="band-desc">准备阶段的人声分离与人物标记结果会被复用，换 TTS 引擎时只需重跑配音阶段。</p>
     </div>
     <div class="grid grid-2" id="stage-grid"></div>
@@ -84,11 +83,12 @@
 
   <section class="band" id="section-speakers" hidden>
     <div class="band-head">
-      <p class="eyebrow">05 / SPEAKERS</p>
-      <h2>人物标记与合并</h2>
-      <p class="band-desc">带合并标记的字幕会与上一条并成一次 TTS 请求，避免同一句话被切开念。</p>
+      <h2><span class="band-step" aria-hidden="true">05</span>字幕片段校正</h2>
+      <p class="band-desc">在草稿中校正时间、译文、原文和人物，可新增或删除片段；应用后统一重建配音任务。</p>
     </div>
     <div id="speaker-summary" class="chip-row"></div>
+    <div class="toolbar" id="speaker-toolbar"></div>
+    <div class="card card-wide" id="speaker-job" hidden></div>
     <div class="table-wrap">
       <table class="table" id="speaker-table"></table>
     </div>
@@ -96,10 +96,11 @@
 
   <section class="band" id="section-tasks" hidden>
     <div class="band-head">
-      <p class="eyebrow">06 / TASKS</p>
-      <h2>配音任务</h2>
-      <p class="band-desc">每条任务用对应时间戳的人声做参考音频；实际时长与字幕时长的差由变速吸收。</p>
+      <h2><span class="band-step" aria-hidden="true">06</span>配音任务</h2>
+      <p class="band-desc">可改字幕文本；单条重生成先出候选供试听，采用后再统一合片。</p>
     </div>
+    <div class="toolbar" id="task-toolbar"></div>
+    <div class="card card-wide" id="task-job" hidden></div>
     <div class="table-wrap">
       <table class="table" id="task-table"></table>
     </div>
@@ -107,8 +108,7 @@
 
   <section class="band" id="section-output" hidden>
     <div class="band-head">
-      <p class="eyebrow">07 / OUTPUT</p>
-      <h2>成片与产物</h2>
+      <h2><span class="band-step" aria-hidden="true">07</span>成片与产物</h2>
     </div>
     <div class="output-layout">
       <div class="card card-flush" id="output-player"></div>
@@ -124,14 +124,44 @@
 <footer class="footer">
   <div class="footer-inner">
     <div>
-      <p class="footer-mark">VideoLingo <span class="wordmark-sub">Dubbing</span></p>
+      <p class="footer-mark">Noiz <span class="wordmark-sub">Dubbing</span></p>
       <p class="footer-note">译文字幕直配管线 · Gemini 人物标记 · NoizAI / ElevenLabs 克隆 · EBU R128 母带</p>
     </div>
     <p class="footer-note" id="footer-engine"></p>
   </div>
 </footer>
 
-<div class="toasts" id="toasts"></div>
+<div class="toasts" id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
+
+<dialog class="modal" id="modal">
+  <form method="dialog" id="modal-form">
+    <h2 class="modal-title" id="modal-title"></h2>
+    <p class="modal-note" id="modal-note"></p>
+    <input type="text" id="modal-input" autocomplete="off">
+    <div class="modal-actions">
+      <button class="btn btn-ghost" type="button" id="modal-cancel">取消</button>
+      <button class="btn btn-primary" type="submit" id="modal-confirm">确定</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="modal modal-wide" id="ref-picker">
+  <div class="ref-picker">
+    <div class="ref-picker-head">
+      <div>
+        <h2 class="modal-title" id="ref-picker-title">更换参考音频</h2>
+        <p class="modal-note" id="ref-picker-note"></p>
+      </div>
+      <button class="btn btn-ghost" type="button" id="ref-picker-close">关闭</button>
+    </div>
+    <div class="ref-picker-toolbar">
+      <label class="ref-picker-label" for="ref-picker-speaker">角色</label>
+      <select id="ref-picker-speaker" aria-label="按角色筛选参考音频"></select>
+      <button class="btn btn-primary" type="button" id="ref-picker-upload">上传文件</button>
+    </div>
+    <div class="ref-picker-list" id="ref-picker-list"></div>
+  </div>
+</dialog>
 
 <script src="/static/app.js"></script>
 </body>

@@ -19,11 +19,15 @@ _8_1_AUDIO_TASK = "output/audio/tts_tasks.xlsx"
 _OUTPUT_DIR = "output"
 _AUDIO_DIR = "output/audio"
 _RAW_AUDIO_FILE = "output/audio/raw.mp3"
-_VOCAL_AUDIO_FILE = "output/audio/vocal.mp3"
-_BACKGROUND_AUDIO_FILE = "output/audio/background.mp3"
+_VOCAL_AUDIO_FILE = "output/audio/vocal.wav"
+_BACKGROUND_AUDIO_FILE = "output/audio/background.wav"
 _AUDIO_REFERS_DIR = "output/audio/refers"
+_AUDIO_REF_OVERRIDES_DIR = "output/audio/reference_overrides"
 _AUDIO_SEGS_DIR = "output/audio/segs"
 _AUDIO_TMP_DIR = "output/audio/tmp"
+_AUDIO_CANDIDATES_DIR = "output/audio/regeneration_candidates"
+_MERGE_PENDING_FILE = "output/audio/merge_pending.json"
+_SUBTITLE_STALE_MARKER = "output/.subtitle_structure_stale"
 
 # ------------------------------------------
 # Done markers (written by st.py task runner after a stage finishes
@@ -51,8 +55,12 @@ __all__ = [
     "_VOCAL_AUDIO_FILE",
     "_BACKGROUND_AUDIO_FILE",
     "_AUDIO_REFERS_DIR",
+    "_AUDIO_REF_OVERRIDES_DIR",
     "_AUDIO_SEGS_DIR",
     "_AUDIO_TMP_DIR",
+    "_AUDIO_CANDIDATES_DIR",
+    "_MERGE_PENDING_FILE",
+    "_SUBTITLE_STALE_MARKER",
     "_TEXT_DONE_MARKER",
     "_AUDIO_DONE_MARKER",
 ]

@@ -56,37 +56,85 @@ def _speaker_tagging_enabled():
     except KeyError:
         return False
 
-def _merge_speaker_utterances(df, tags):
-    """Merge only LLM-confirmed continuations from the same speaker."""
-    min_confidence = load_key("speaker_tagging.min_confidence")
-    max_gap = load_key("speaker_tagging.max_gap")
+
+def _merge_max_gap():
+    """Shared gap limit for merge-with-previous (reference + TTS are one decision)."""
+    try:
+        return float(load_key("speaker_tagging.tts_merge_max_gap"))
+    except KeyError:
+        try:
+            return float(load_key("speaker_tagging.max_gap"))
+        except KeyError:
+            return 1.0
+
+
+def _decide_merge_with_previous(previous, row, max_gap, min_confidence, today):
+    """Same rule for reference pooling and TTS source merge.
+
+    Default is automatic: same speaker within ``tts_merge_max_gap``.
+    Explicit ``force_unmerge`` keeps a cue separate.
+    """
+    if not previous:
+        return False
+    if bool(row.get("force_unmerge")):
+        return False
+    if row["speaker"] != previous["speaker"]:
+        return False
+    gap = time_diff_seconds(previous["end_time"], row["start_time"], today)
+    if not (-0.5 <= gap <= max_gap):
+        return False
+    if row.get("manual_override") or previous.get("manual_override"):
+        return True
+    return (
+        float(row.get("speaker_confidence") or 0) >= min_confidence
+        and float(previous.get("speaker_confidence") or 0) >= min_confidence
+    )
+
+
+def _annotate_speaker_cues(df, tags):
+    """Attach speaker metadata and resolve merge-with-previous decisions."""
+    min_confidence = float(load_key("speaker_tagging.min_confidence"))
+    max_gap = _merge_max_gap()
     today = datetime.date.today()
-    grouped = []
+    rows = []
 
     for row in df.to_dict("records"):
         tag = tags.get(row["number"], {})
         row["speaker"] = tag.get("speaker", f"unknown_{row['number']}")
         row["speaker_confidence"] = float(tag.get("confidence", 0))
-        row["merge_with_previous"] = bool(tag.get("merge_with_previous", False))
+        row["force_unmerge"] = bool(tag.get("force_unmerge", False))
+        row["manual_override"] = bool(tag.get("manual_override", False))
         row["source_numbers"] = [row["number"]]
+        # Intent from tags; final value is overwritten by the shared auto rule.
+        row["merge_with_previous"] = bool(tag.get("merge_with_previous", False))
 
-        should_merge = False
-        if grouped and row["merge_with_previous"]:
-            previous = grouped[-1]
-            gap = time_diff_seconds(
-                previous["end_time"],
-                row["start_time"],
-                today,
+        previous = rows[-1] if rows else None
+        merge = _decide_merge_with_previous(
+            previous, row, max_gap, min_confidence, today
+        )
+        row["merge_with_previous"] = merge
+        row["reference_merge_with_previous"] = merge
+        if merge:
+            rprint(
+                f"[green]Merge-with-previous cue {previous['number']} + "
+                f"{row['number']} ({row['speaker']}, "
+                f"gap<={max_gap:.2f}s)[/green]"
             )
-            should_merge = (
-                row["speaker"] == previous["speaker"]
-                and row["speaker_confidence"] >= min_confidence
-                and previous["speaker_confidence"] >= min_confidence
-                and -0.5 <= gap <= max_gap
-            )
+        rows.append(row)
 
+    return pd.DataFrame(rows)
+
+
+def _merge_tts_by_speaker_gap(df):
+    """Merge TTS sources using the same merge-with-previous decisions."""
+    today = datetime.date.today()
+    grouped = []
+
+    for row in df.to_dict("records"):
+        should_merge = bool(grouped) and bool(row.get("merge_with_previous"))
         if should_merge:
             previous = grouped[-1]
+            gap = time_diff_seconds(previous["end_time"], row["start_time"], today)
             previous["text"] += " " + row["text"]
             previous["origin"] += " " + row["origin"]
             previous["end_time"] = row["end_time"]
@@ -95,19 +143,18 @@ def _merge_speaker_utterances(df, tags):
                 previous["end_time"],
                 today,
             )
-            previous["speaker_confidence"] = min(
-                previous["speaker_confidence"],
-                row["speaker_confidence"],
-            )
-            previous["source_numbers"].append(row["number"])
+            previous["source_numbers"].extend(row["source_numbers"])
+            previous["tts_merge_count"] = len(previous["source_numbers"])
             rprint(
-                f"[green]Merging same-speaker utterance cues "
-                f"{previous['source_numbers']} ({previous['speaker']})[/green]"
+                f"[green]Merging TTS cues "
+                f"{previous['source_numbers']} ({previous['speaker']}, gap={gap:.3f}s)[/green]"
             )
         else:
+            row["tts_merge_count"] = 1
             grouped.append(row)
 
     return pd.DataFrame(grouped)
+
 
 def process_srt():
     """Process srt file, generate audio tasks"""
@@ -159,14 +206,13 @@ def process_srt():
     
     df = pd.DataFrame(subtitles)
     
-    tags = {}
-    if _speaker_tagging_enabled():
-        tags = load_speaker_tags()
-        if not tags:
-            tags = tag_srt_speakers()
+    tags = load_speaker_tags()
+    if not tags and _speaker_tagging_enabled():
+        tags = tag_srt_speakers()
 
     if tags:
-        df = _merge_speaker_utterances(df, tags)
+        df = _annotate_speaker_cues(df, tags)
+        df = _merge_tts_by_speaker_gap(df)
     else:
         i = 0
         MIN_SUB_DUR = load_key("min_subtitle_duration")

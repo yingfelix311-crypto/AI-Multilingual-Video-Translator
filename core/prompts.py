@@ -338,6 +338,56 @@ Note: Start you answer with ```json and end with ```, do not add any other text.
 '''.strip()
     return trim_prompt
 
+
+def get_cue_shorten_prompt(cues, available, real_dur, max_speed, round_index, max_rounds):
+    target_dur = max(0.1, available * max_speed * 0.95)
+    ratio = min(0.95, target_dur / max(0.001, real_dur))
+    cue_blocks = []
+    for cue in cues:
+        cue_blocks.append(
+            f'- cue={cue["cue"]}\n'
+            f'  text="{cue["text"]}"\n'
+            f'  origin="{cue.get("origin") or ""}"\n'
+            f'  budget={cue.get("budget", 0):.3f}s'
+        )
+    cues_text = "\n".join(cue_blocks)
+    return f'''
+## Role
+You are a professional dubbing subtitle editor. Spoken audio exceeded its time window even at the maximum allowed speed. Shorten each cue slightly so the next TTS pass can fit.
+
+## Constraints
+1. Keep the exact same cue IDs and order. Do not merge, split, delete, or add cues.
+2. Preserve speaker intent and meaning. Prefer dropping fillers/modifiers over changing facts.
+3. Every shortened text must stay in the original language of that cue.
+4. Every shortened text must be non-empty and not longer than the previous text.
+5. Target about {ratio:.0%} of the previous spoken length overall.
+
+## Timing
+- Available window: {available:.3f}s
+- Previous spoken duration: {real_dur:.3f}s
+- Max speed: {max_speed:.2f}x
+- Target spoken duration at 1.0x: <= {target_dur:.3f}s
+- Shorten round: {round_index}/{max_rounds}
+
+## INPUT
+<subtitles>
+{cues_text}
+</subtitles>
+
+## Output in only JSON format and no other text
+```json
+{{
+    "analysis": "Brief note on what was shortened and why meaning is preserved",
+    "cues": [
+        {{"cue": 1, "text": "shortened text for cue 1"}},
+        {{"cue": 2, "text": "shortened text for cue 2"}}
+    ]
+}}
+```
+
+Note: Start you answer with ```json and end with ```, do not add any other text. Return one object per input cue with the same cue IDs.
+'''.strip()
+
 ## ================================================================
 # @ tts_main
 def get_correct_text_prompt(text):

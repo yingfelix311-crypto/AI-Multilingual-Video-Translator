@@ -16,11 +16,15 @@ from core._11_merge_audio import _parse_list
 from core.utils.config_utils import _PLACEHOLDER_KEYS, load_key, load_secret, update_key
 from core.utils.models import (
     _8_1_AUDIO_TASK,
+    _AUDIO_CANDIDATES_DIR,
     _AUDIO_DONE_MARKER,
+    _AUDIO_REF_OVERRIDES_DIR,
     _AUDIO_REFERS_DIR,
     _AUDIO_SEGS_DIR,
+    _AUDIO_TMP_DIR,
     _BACKGROUND_AUDIO_FILE,
     _RAW_AUDIO_FILE,
+    _SUBTITLE_STALE_MARKER,
     _TEXT_DONE_MARKER,
     _VOCAL_AUDIO_FILE,
 )
@@ -29,7 +33,7 @@ OUTPUT_DIR = Path("output")
 TRANS_SRT = OUTPUT_DIR / "trans.srt"
 SRC_SRT = OUTPUT_DIR / "src.srt"
 DUB_SRT = OUTPUT_DIR / "dub.srt"
-DUB_AUDIO = OUTPUT_DIR / "dub.mp3"
+DUB_AUDIO = OUTPUT_DIR / "dub.wav"
 DUB_VIDEO = OUTPUT_DIR / "output_dub.mp4"
 SPEAKER_TAGS = OUTPUT_DIR / "audio" / "speaker_tags.json"
 UPLOAD_TRANS_SRT = OUTPUT_DIR / "_import_trans.srt"
@@ -73,7 +77,6 @@ TTS_OPTIONS = [
 CONFIG_GROUPS = [
     {
         "id": "engine",
-        "eyebrow": "ENGINE",
         "title": "配音引擎",
         "desc": "克隆模式会为每句取对应时间戳的人声做参考音频。",
         "fields": [
@@ -82,7 +85,6 @@ CONFIG_GROUPS = [
     },
     {
         "id": "noiz",
-        "eyebrow": "NOIZAI",
         "title": "NoizAI 参数",
         "when": ["tts_method", "custom_tts"],
         "fields": [
@@ -101,7 +103,6 @@ CONFIG_GROUPS = [
     },
     {
         "id": "elevenlabs",
-        "eyebrow": "ELEVENLABS",
         "title": "ElevenLabs 参数",
         "when": ["tts_method", "elevenlabs_tts"],
         "fields": [
@@ -131,22 +132,21 @@ CONFIG_GROUPS = [
     },
     {
         "id": "speaker",
-        "eyebrow": "SPEAKERS",
-        "title": "人物标记与合并",
-        "desc": "由 LLM 读整段字幕推断人物，只有被判定为同一人连续话语且间隔够小的相邻字幕才会合并成一次 TTS。",
+        "title": "人物标记与参考音频分组",
+        "desc": "由 LLM 推断人物；相邻同人物字幕可合并参考音频，间隔不超过阈值时合成一次 TTS。",
         "fields": [
             {"key": "speaker_tagging.enabled", "label": "启用 LLM 人物标记", "type": "bool"},
             {
                 "key": "speaker_tagging.min_confidence",
-                "label": "合并所需最低置信度",
+                "label": "自动合并所需最低置信度",
                 "type": "number",
                 "min": 0,
                 "max": 1,
                 "step": 0.05,
             },
             {
-                "key": "speaker_tagging.max_gap",
-                "label": "合并允许的最大间隔（秒）",
+                "key": "speaker_tagging.tts_merge_max_gap",
+                "label": "合并上一条允许的最大间隔（秒）",
                 "type": "number",
                 "min": 0,
                 "max": 5,
@@ -156,7 +156,6 @@ CONFIG_GROUPS = [
     },
     {
         "id": "mastering",
-        "eyebrow": "MASTERING",
         "title": "响度母带与原声区间",
         "desc": "成片做两遍 EBU R128 归一化；原声区间内配音让位，回放视频原始音轨。",
         "fields": [
@@ -166,12 +165,21 @@ CONFIG_GROUPS = [
             {"key": "audio_mastering.loudness_range", "label": "响度范围 (LU)", "type": "number", "min": 1, "max": 20, "step": 0.5},
             {"key": "audio_mastering.crossfade_ms", "label": "交叉淡化 (ms)", "type": "number", "min": 0, "max": 500, "step": 10},
             {"key": "audio_mastering.audio_bitrate", "label": "音频码率", "type": "text"},
+            {"key": "audio_mastering.background_ducking", "label": "对白时自动降低背景", "type": "bool"},
+            {"key": "audio_mastering.ducking_threshold", "label": "背景避让触发阈值", "type": "number", "min": 0.001, "max": 1, "step": 0.005},
+            {"key": "audio_mastering.ducking_ratio", "label": "背景避让压缩比", "type": "number", "min": 1, "max": 20, "step": 0.5},
+            {"key": "audio_mastering.ducking_attack_ms", "label": "背景避让启动 (ms)", "type": "number", "min": 1, "max": 500, "step": 5},
+            {"key": "audio_mastering.ducking_release_ms", "label": "背景避让释放 (ms)", "type": "number", "min": 10, "max": 2000, "step": 10},
+            {"key": "audio_mastering.preserve_original_vocals_in_gaps", "label": "TTS 空白处保留原人声", "type": "bool"},
+            {"key": "audio_mastering.gap_vocals_guard_ms", "label": "原人声保护静音余量 (ms)", "type": "number", "min": 0, "max": 1000, "step": 10},
+            {"key": "audio_mastering.gap_vocals_merge_ms", "label": "相邻对白合并间隔 (ms)", "type": "number", "min": 0, "max": 2000, "step": 50},
+            {"key": "audio_mastering.gap_vocals_min_duration_ms", "label": "保留原人声最短空档 (ms)", "type": "number", "min": 0, "max": 5000, "step": 100},
+            {"key": "audio_mastering.gap_vocals_gain", "label": "空档原人声音量", "type": "number", "min": 0, "max": 1.5, "step": 0.05},
             {"key": "audio_mastering.original_audio_intervals", "label": "保留原声区间（秒）", "type": "intervals"},
         ],
     },
     {
         "id": "pipeline",
-        "eyebrow": "PIPELINE",
         "title": "流程与变速",
         "fields": [
             {"key": "demucs", "label": "Demucs 人声分离", "type": "bool"},
@@ -183,7 +191,6 @@ CONFIG_GROUPS = [
     },
     {
         "id": "llm",
-        "eyebrow": "LLM",
         "title": "LLM 接入",
         "fields": [
             {"key": "api.model", "label": "模型", "type": "text"},
@@ -205,12 +212,39 @@ def _file_entry(path, label):
     file = Path(path)
     if not file.is_file():
         return None
+    stat = file.stat()
+    mtime = int(stat.st_mtime)
     return {
         "label": label,
         "path": str(path),
-        "url": f"/files/{_to_relative(path)}",
-        "size": file.stat().st_size,
+        "url": f"/files/{_to_relative(path)}?v={stat.st_mtime_ns}",
+        "size": stat.st_size,
+        "mtime": mtime,
     }
+
+
+def _effective_refer(number):
+    override = Path(_AUDIO_REF_OVERRIDES_DIR) / f"{number}.wav"
+    if override.is_file():
+        entry = _file_entry(override, "手工参考")
+        if entry:
+            entry["source"] = "override"
+        return entry
+    auto = Path(_AUDIO_REFERS_DIR) / f"{number}.wav"
+    entry = _file_entry(auto, "参考音频")
+    if entry:
+        entry["source"] = "auto"
+    return entry
+
+
+def _task_needs_regen(number, lines):
+    """True when a task has no temp TTS cache (or empty cache)."""
+    count = len(lines) if lines else 1
+    for index in range(count):
+        temp = Path(_AUDIO_TMP_DIR) / f"{number}_{index}_temp.wav"
+        if not temp.is_file() or temp.stat().st_size < 100:
+            return True
+    return False
 
 
 # ------------
@@ -364,7 +398,9 @@ def read_speakers():
                 "speaker": tag.get("speaker"),
                 "confidence": tag.get("confidence"),
                 "merge_with_previous": tag.get("merge_with_previous"),
+                "force_unmerge": bool(tag.get("force_unmerge", False)),
                 "reason": tag.get("reason"),
+                "manual_override": bool(tag.get("manual_override", False)),
             }
         )
 
@@ -380,6 +416,7 @@ def read_speakers():
     return {
         "cues": rows,
         "speakers": speakers,
+        "speaker_names": [item["name"] for item in speakers],
         "groups": len(rows) - merged,
         "stale": stale,
     }
@@ -390,18 +427,80 @@ def read_speakers():
 # ------------
 
 
+def _read_candidates(number, line_count):
+    from webui.editing import list_candidate_manifests
+
+    candidates = []
+    for manifest in list_candidate_manifests(number):
+        count = int(manifest.get("line_count") or line_count or 1)
+        candidate_id = manifest.get("candidate_id")
+        root = Path(_AUDIO_CANDIDATES_DIR) / str(number)
+        if candidate_id:
+            root = root / str(candidate_id)
+        segments = [
+            entry
+            for entry in (
+                _file_entry(root / "segs" / f"{number}_{index}.wav", f"候选片段 {index + 1}")
+                for index in range(count)
+            )
+            if entry
+        ]
+        temps = [
+            entry
+            for entry in (
+                _file_entry(root / "tmp" / f"{number}_{index}_temp.wav", f"候选完整音频 {index + 1}")
+                for index in range(count)
+            )
+            if entry
+        ]
+        if not temps and not segments:
+            continue
+        fits = bool(manifest.get("fits", True))
+        candidates.append({
+            "number": number,
+            "candidate_id": candidate_id,
+            "real_dur": manifest.get("real_dur"),
+            "available": manifest.get("available"),
+            "required_speed": manifest.get("required_speed"),
+            "speed_factor": manifest.get("speed_factor"),
+            "created_at": manifest.get("created_at"),
+            "fits": fits,
+            "status": manifest.get("status") or ("fitted" if fits else "forced_merge"),
+            "shorten_rounds": manifest.get("shorten_rounds", 0),
+            "force_shorten": bool(manifest.get("force_shorten", False)),
+            "text_changed": bool(manifest.get("text_changed")),
+            "original_text": manifest.get("original_text") or "",
+            "candidate_text": manifest.get("candidate_text") or "",
+            "original_cues": manifest.get("original_cues") or [],
+            "candidate_cues": manifest.get("candidate_cues") or [],
+            "failure_reason": manifest.get("failure_reason"),
+            "segments": segments,
+            "temps": temps,
+        })
+    return candidates
+
+
+def _read_candidate(number, line_count):
+    candidates = _read_candidates(number, line_count)
+    return candidates[0] if candidates else None
+
+
 def read_tasks():
     task_file = Path(_8_1_AUDIO_TASK)
     if not task_file.is_file():
-        return {"tasks": [], "columns": []}
+        return {"tasks": [], "merge_pending": [], "columns": []}
 
     import pandas as pd
+    from webui.editing import read_merge_pending
 
     df = pd.read_excel(task_file)
+    pending = set(read_merge_pending())
     rows = []
     for record in df.to_dict("records"):
         number = int(record["number"])
         lines = _safe_list(record.get("lines"))
+        line_count = len(lines) if lines else 1
+        candidates = _read_candidates(number, line_count)
         rows.append(
             {
                 "number": number,
@@ -415,19 +514,24 @@ def read_tasks():
                 "real_dur": _safe_float(record.get("real_dur")),
                 "text": _safe_text(record.get("text")),
                 "origin": _safe_text(record.get("origin")),
-                "line_count": len(lines) if lines else 1,
-                "refer": _file_entry(f"{_AUDIO_REFERS_DIR}/{number}.wav", "参考音频"),
+                "line_count": line_count,
+                "refer": _effective_refer(number),
+                "has_override": (Path(_AUDIO_REF_OVERRIDES_DIR) / f"{number}.wav").is_file(),
+                "needs_regen": _task_needs_regen(number, lines),
+                "merge_pending": number in pending,
+                "candidate": candidates[0] if candidates else None,
+                "candidates": candidates,
                 "segments": [
                     entry
                     for entry in (
                         _file_entry(f"{_AUDIO_SEGS_DIR}/{number}_{index}.wav", f"片段 {index + 1}")
-                        for index in range(len(lines) if lines else 1)
+                        for index in range(line_count)
                     )
                     if entry
                 ],
             }
         )
-    return {"tasks": rows}
+    return {"tasks": rows, "merge_pending": sorted(pending)}
 
 
 def _safe_list(value):
@@ -472,11 +576,15 @@ def _upload_entry(path):
 
 
 def read_state():
+    from webui.editing import read_merge_pending
+
     media = read_media()
     cues = parse_srt(TRANS_SRT)
     task_file = Path(_8_1_AUDIO_TASK)
     refers = sorted(Path(_AUDIO_REFERS_DIR).glob("*.wav")) if Path(_AUDIO_REFERS_DIR).is_dir() else []
     segs = sorted(Path(_AUDIO_SEGS_DIR).glob("*.wav")) if Path(_AUDIO_SEGS_DIR).is_dir() else []
+    merge_pending = read_merge_pending()
+    subtitle_stale = Path(_SUBTITLE_STALE_MARKER).is_file()
 
     artifacts = [
         entry
@@ -511,6 +619,9 @@ def read_state():
             "segment_count": len(segs),
             "video_ready": DUB_VIDEO.is_file(),
             "audio_ready": DUB_AUDIO.is_file(),
+            "stale": bool(merge_pending or subtitle_stale) and DUB_VIDEO.is_file(),
+            "subtitle_stale": subtitle_stale,
+            "merge_pending": merge_pending,
         },
         "artifacts": artifacts,
         "tts_method": load_key("tts_method"),

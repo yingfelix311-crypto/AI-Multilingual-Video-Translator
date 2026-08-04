@@ -418,15 +418,20 @@ def page_setting():
                         update_key("speaker_tagging.min_confidence", min_confidence)
                         st.rerun()
 
+                    try:
+                        current_gap = float(load_key("speaker_tagging.tts_merge_max_gap"))
+                    except KeyError:
+                        current_gap = float(load_key("speaker_tagging.max_gap"))
                     max_gap = st.slider(
-                        "Maximum continuous gap (seconds)",
+                        "Merge-with-previous max gap (seconds)",
                         min_value=0.0,
                         max_value=3.0,
-                        value=float(load_key("speaker_tagging.max_gap")),
+                        value=current_gap,
                         step=0.1,
+                        help="Same limit for reference pooling and TTS source merge",
                     )
-                    if max_gap != load_key("speaker_tagging.max_gap"):
-                        update_key("speaker_tagging.max_gap", max_gap)
+                    if abs(max_gap - current_gap) > 1e-9:
+                        update_key("speaker_tagging.tts_merge_max_gap", max_gap)
                         st.rerun()
             config_input("NoizAI Target Lang", "noiz_tts.target_lang")
             similarity_enh = st.toggle(

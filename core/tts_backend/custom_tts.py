@@ -8,7 +8,7 @@ import requests
 from pydub import AudioSegment
 from core.utils import load_key, except_handler
 from core.utils.config_utils import load_secret
-from core.utils.models import _AUDIO_REFERS_DIR
+from core.utils.models import _AUDIO_REF_OVERRIDES_DIR, _AUDIO_REFERS_DIR
 
 NOIZ_BASE_URL = "https://noiz.ai/v1"
 MIN_REF_SECONDS = 3.0
@@ -59,44 +59,64 @@ def _audio_duration_seconds(path):
     return len(AudioSegment.from_file(path)) / 1000.0
 
 
+def _atomic_export(audio, out_path):
+    out_path = Path(out_path)
+    temp_path = out_path.with_name(
+        f".{out_path.stem}.{threading.get_ident()}.tmp.wav"
+    )
+    try:
+        audio.export(temp_path, format="wav")
+        temp_path.replace(out_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+def _override_ref_path(number):
+    return Path(_AUDIO_REF_OVERRIDES_DIR) / f"{number}.wav"
+
+
 def _sentence_ref_path(refers_dir, number):
+    override = _override_ref_path(number)
+    if override.is_file():
+        return override, "override"
     primary = refers_dir / f"{number}.wav"
     if primary.exists():
-        return primary
+        return primary, "auto"
     raise FileNotFoundError(f"Reference audio not found for sentence {number}")
 
 
 def _resolve_clone_source(number):
     """
-    Strictly use this sentence's timestamp reference.
+    Prefer a manual override for this task; otherwise use the timestamp refer.
     If it is shorter than 3s, loop only that same clip until it reaches 3s.
     """
     refers_dir = _ensure_refers_dir()
-    sentence_ref = _sentence_ref_path(refers_dir, number)
+    sentence_ref, source = _sentence_ref_path(refers_dir, number)
     duration = _audio_duration_seconds(sentence_ref)
     if duration <= 0:
         raise ValueError(f"Reference audio is empty for sentence {number}: {sentence_ref}")
     audio = AudioSegment.from_file(sentence_ref)
     out_path = refers_dir / f"_noiz_ref_{number}.wav"
+    label = "override" if source == "override" else "sentence refer"
 
     if duration < MIN_REF_SECONDS:
         repeat_count = math.ceil(MIN_REF_SECONDS / duration)
         repeated = (audio * repeat_count)[: int(MIN_REF_SECONDS * 1000)]
-        repeated.export(out_path, format="wav")
+        _atomic_export(repeated, out_path)
         print(
-            f"Sentence refer #{number} is {duration:.2f}s; "
-            f"looped the same timestamp clip {repeat_count}x to {MIN_REF_SECONDS:.2f}s"
+            f"{label} #{number} is {duration:.2f}s; "
+            f"looped the same clip {repeat_count}x to {MIN_REF_SECONDS:.2f}s"
         )
-        return {"type": "file", "path": out_path}
+        return {"type": "file", "path": out_path, "source": source}
 
     if duration > MAX_REF_SECONDS:
         audio = audio[: int(MAX_REF_SECONDS * 1000)]
-        audio.export(out_path, format="wav")
-        print(f"Using sentence refer #{number}: trimmed {duration:.2f}s -> {MAX_REF_SECONDS:.1f}s")
-        return {"type": "file", "path": out_path}
+        _atomic_export(audio, out_path)
+        print(f"Using {label} #{number}: trimmed {duration:.2f}s -> {MAX_REF_SECONDS:.1f}s")
+        return {"type": "file", "path": out_path, "source": source}
 
-    print(f"Using exact sentence refer #{number}: {duration:.2f}s")
-    return {"type": "file", "path": sentence_ref}
+    print(f"Using {label} #{number}: {duration:.2f}s")
+    return {"type": "file", "path": sentence_ref, "source": source}
 
 
 def _save_audio_response(response, save_path):

@@ -69,7 +69,7 @@ For every cue:
    otherwise use stable labels such as woman_1, man_1, child_1, narrator.
 2. Set merge_with_previous=true ONLY when this cue and the immediately previous
    cue are spoken by the same character AND form one continuous utterance that
-   should be synthesized in a single TTS request.
+   should share one reference clip and one TTS request.
 3. Do not merge merely because the same speaker talks twice. A completed thought,
    a response turn, a noticeable pause, or uncertainty must remain separate.
 4. Give confidence from 0 to 1. Use low confidence for ambiguous short lines.
@@ -104,6 +104,70 @@ def load_speaker_tags(srt_path="output/trans.srt", tags_path=SPEAKER_TAGS_FILE):
     if data.get("source_hash") != _source_hash(content):
         return {}
     return {item["cue"]: item for item in data.get("items", [])}
+
+
+def save_speaker_tags(items, srt_path="output/trans.srt", tags_path=SPEAKER_TAGS_FILE, model=None):
+    """Persist speaker tags for the current SRT. Manual edits set confidence=1.0."""
+    srt_file = Path(srt_path)
+    if not srt_file.is_file():
+        raise FileNotFoundError(f"SRT not found: {srt_path}")
+
+    content = srt_file.read_text(encoding="utf-8")
+    cues = _parse_srt(content)
+    if not cues:
+        raise ValueError("No valid SRT cues found for speaker tagging")
+
+    expected = [cue["cue"] for cue in cues]
+    normalized = []
+    for raw in items:
+        if not isinstance(raw, dict):
+            raise ValueError("Each speaker tag must be an object")
+        cue = int(raw["cue"])
+        speaker = str(raw.get("speaker", "")).strip()
+        if not speaker:
+            raise ValueError(f"Missing speaker for cue {cue}")
+        merge = bool(raw.get("merge_with_previous", False))
+        confidence = float(raw.get("confidence", 1.0 if raw.get("manual_override") else 0.0))
+        if not 0 <= confidence <= 1:
+            raise ValueError(f"Invalid confidence for cue {cue}")
+        normalized.append({
+            "cue": cue,
+            "speaker": speaker,
+            "merge_with_previous": merge,
+            "force_unmerge": bool(raw.get("force_unmerge", False)) and not merge,
+            "confidence": confidence,
+            "reason": str(raw.get("reason", "")).strip(),
+            "manual_override": bool(raw.get("manual_override", False)),
+        })
+
+    actual = [item["cue"] for item in normalized]
+    if actual != expected:
+        raise ValueError(f"Cue IDs mismatch: expected {expected}, got {actual}")
+
+    # First cue can never merge into a previous one.
+    if normalized and normalized[0]["merge_with_previous"]:
+        raise ValueError(f"Cue {normalized[0]['cue']} cannot merge with a previous cue")
+
+    for index, item in enumerate(normalized[1:], start=1):
+        if not item["merge_with_previous"]:
+            continue
+        previous = normalized[index - 1]
+        if item["speaker"] != previous["speaker"]:
+            raise ValueError(
+                f"Cue {item['cue']} cannot merge into previous: "
+                f"speaker '{item['speaker']}' != '{previous['speaker']}'"
+            )
+
+    result = {
+        "source_hash": _source_hash(content),
+        "model": model if model is not None else load_key("api.model"),
+        "items": normalized,
+    }
+    tags_file = Path(tags_path)
+    tags_file.parent.mkdir(parents=True, exist_ok=True)
+    tags_file.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    rprint(f"[green]Speaker tags saved: {tags_path} ({len(normalized)} cues)[/green]")
+    return {item["cue"]: item for item in normalized}
 
 
 def tag_srt_speakers(srt_path="output/trans.srt", tags_path=SPEAKER_TAGS_FILE, force=False):

@@ -13,6 +13,7 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8501)
     parser.add_argument("--reload", action="store_true")
+    parser.add_argument("--access-log", action="store_true")
     args = parser.parse_args()
 
     os.chdir(ROOT)
@@ -25,7 +26,13 @@ def main():
     import uvicorn
 
     print(f"VideoLingo Dubbing UI -> http://{args.host}:{args.port}")
-    uvicorn.run("webui.server:app", host=args.host, port=args.port, reload=args.reload)
+    uvicorn.run(
+        "webui.server:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        access_log=args.access_log,
+    )
 
 
 if __name__ == "__main__":

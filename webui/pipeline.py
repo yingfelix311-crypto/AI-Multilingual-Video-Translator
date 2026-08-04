@@ -12,7 +12,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from core.utils.models import _8_1_AUDIO_TASK, _AUDIO_DONE_MARKER, _TEXT_DONE_MARKER
+from core.utils.models import (
+    _8_1_AUDIO_TASK,
+    _AUDIO_DONE_MARKER,
+    _SUBTITLE_STALE_MARKER,
+    _TEXT_DONE_MARKER,
+)
 from webui.workspace import UPLOAD_SRC_SRT, UPLOAD_TRANS_SRT
 
 
@@ -22,7 +27,7 @@ def _drop(path):
 
 PREPARE_LABELS = [
     "导入字幕、标记人物并分离人声",
-    "按人物合并并生成配音任务",
+    "生成同人物连续配音任务与参考音频分组",
     "切分逐句参考音频",
 ]
 
@@ -32,10 +37,13 @@ DUB_LABELS = [
     "混音、响度母带并输出成片",
 ]
 
+REBUILD_SPEAKERS_LABELS = [
+    "校验并保存人物标记，重建配音任务",
+]
+
 STAGES = [
     {
         "name": "prepare",
-        "eyebrow": "STAGE 01",
         "title": "准备素材",
         "desc": "对齐字幕与视频时长，标记人物，分离人声并切出逐句参考音频。",
         "action": "开始准备",
@@ -43,7 +51,6 @@ STAGES = [
     },
     {
         "name": "dub",
-        "eyebrow": "STAGE 02",
         "title": "生成配音",
         "desc": "逐句克隆合成、按时间轴拼接，再做响度母带并封装成片。",
         "action": "开始配音",
@@ -96,8 +103,13 @@ def dub_steps(force=True):
 
     def step_tts():
         from core import _10_gen_audio
+        from webui.editing import CANDIDATE_DIR, clear_merge_pending
+        import shutil
 
         _drop(_AUDIO_DONE_MARKER)
+        clear_merge_pending()
+        if CANDIDATE_DIR.exists():
+            shutil.rmtree(CANDIDATE_DIR, ignore_errors=True)
         _10_gen_audio.gen_audio(force=force)
 
     def step_merge():
@@ -110,8 +122,48 @@ def dub_steps(force=True):
 
         _12_dub_to_vid.merge_video_audio()
         Path(_AUDIO_DONE_MARKER).write_text("webui\n", encoding="utf-8")
+        _drop(_SUBTITLE_STALE_MARKER)
 
     return list(zip(DUB_LABELS, [step_tts, step_merge, step_master]))
+
+
+# ------------
+# Manual edits
+# ------------
+
+
+def rebuild_speakers_steps(items):
+    from webui.editing import rebuild_speaker_steps
+
+    return rebuild_speaker_steps(items)
+
+
+def rebuild_cues_steps(items, media_duration=None):
+    from webui.editing import rebuild_cue_steps
+
+    return rebuild_cue_steps(items, media_duration=media_duration)
+
+
+def selective_dub_steps(task_numbers):
+    from webui.editing import selective_dub_steps as _steps
+
+    return _steps(task_numbers)
+
+
+def candidate_steps(task_number, count=1, force_shorten=False):
+    from webui.editing import generate_candidate_steps
+
+    return generate_candidate_steps(
+        task_number,
+        count=count,
+        force_shorten=force_shorten,
+    )
+
+
+def remaster_steps():
+    from webui.editing import remaster_steps as _steps
+
+    return _steps()
 
 
 # ------------
@@ -121,8 +173,13 @@ def dub_steps(force=True):
 
 def archive_workspace():
     from core.utils.onekeycleanup import cleanup
+    from webui.editing import CANDIDATE_DIR, clear_merge_pending
+    import shutil
 
     cleanup()
     for path in (UPLOAD_TRANS_SRT, UPLOAD_SRC_SRT):
         _drop(path)
+    clear_merge_pending()
+    if CANDIDATE_DIR.exists():
+        shutil.rmtree(CANDIDATE_DIR, ignore_errors=True)
     os.makedirs("output", exist_ok=True)
