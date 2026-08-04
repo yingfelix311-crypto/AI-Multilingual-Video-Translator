@@ -263,6 +263,54 @@ def text_processing_section():
                     steps = _get_text_steps()
                     runner.start(steps)
                     st.rerun()
+
+                # ------------
+                # Import existing translated SRT and skip Whisper/translation
+                # ------------
+                with st.expander("已有译好的 SRT？跳过识别/翻译，直接配音", expanded=True):
+                    st.caption(
+                        "上传翻译后的 SRT（可选原文字幕）。SRT 超出视频时长时会自动截断。"
+                    )
+                    trans_upload = st.file_uploader(
+                        "翻译字幕 SRT（必填）", type=["srt"], key="import_trans_srt"
+                    )
+                    src_upload = st.file_uploader(
+                        "原文字幕 SRT（可选，没有则复用译文）",
+                        type=["srt"],
+                        key="import_src_srt",
+                    )
+                    if st.button(
+                        "导入 SRT 并准备配音",
+                        key="import_srt_button",
+                        use_container_width=True,
+                    ):
+                        if not trans_upload:
+                            st.error("请先上传翻译后的 SRT 文件")
+                        else:
+                            os.makedirs("output", exist_ok=True)
+                            trans_path = os.path.join("output", "_import_trans.srt")
+                            with open(trans_path, "wb") as f:
+                                f.write(trans_upload.getbuffer())
+                            src_path = None
+                            if src_upload:
+                                src_path = os.path.join("output", "_import_src.srt")
+                                with open(src_path, "wb") as f:
+                                    f.write(src_upload.getbuffer())
+                            try:
+                                from core.import_translated_srt import import_translated_srt
+
+                                with st.spinner("正在导入 SRT 并准备音频..."):
+                                    summary = import_translated_srt(
+                                        trans_srt_path=trans_path,
+                                        src_srt_path=src_path,
+                                    )
+                                msg = f"已准备配音：{summary['cue_count']} 条字幕"
+                                if summary["dropped_cues"]:
+                                    msg += f"（已按视频时长自动截断，去掉 {summary['dropped_cues']} 条）"
+                                st.success(msg)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"导入失败: {e}")
         else:
             if not audio_only and load_key("burn_subtitles") and os.path.exists(SUB_VIDEO):
                 st.video(SUB_VIDEO)

@@ -12,23 +12,23 @@ display_language: "zh-CN"
 # API settings
 api:
   key: 'YOUR_API_KEY'
-  base_url: 'https://yunwu.ai'
-  model: 'gpt-5.5'
-  llm_support_json: false
+  base_url: 'https://generativelanguage.googleapis.com/v1beta/openai/'
+  model: 'gemini-3.6-flash'
+  llm_support_json: true
 # *Number of LLM multi-threaded accesses, set to 1 if using local LLM
 max_workers: 4
 
 # Language settings, written into the prompt, can be described in natural language
-target_language: '简体中文'
+target_language: 'English'
 
 # Whether to use Demucs for vocal separation before transcription
-demucs: false
+demucs: true
 
 whisper:
   # ["large-v3", "large-v3-turbo"]. Note: for zh model will force to use Belle/large-v3
   model: 'large-v3'
   # Whisper specified recognition language ISO 639-1
-  language: 'en'
+  language: 'zh'
   detected_language: 'en'
   # Whisper running mode ["local", "cloud", "elevenlabs"]. Specifies where to run, cloud uses 302.ai API
   runtime: 'local'
@@ -38,7 +38,7 @@ whisper:
   elevenlabs_api_key: 'your_elevenlabs_api_key'
 
 # Whether to burn subtitles into the video
-burn_subtitles: true
+burn_subtitles: false
 
 ## ======================== Advanced Settings ======================== ##
 # *🔬 h264_nvenc GPU acceleration for ffmpeg, make sure your GPU supports it
@@ -70,8 +70,50 @@ reflect_translate: true
 pause_before_translate: false
 
 ## ======================== Dubbing Settings ======================== ##
-# TTS selection [sf_fish_tts, openai_tts, gpt_sovits, azure_tts, fish_tts, edge_tts, custom_tts]
-tts_method: 'azure_tts'
+# TTS selection [sf_fish_tts, openai_tts, gpt_sovits, azure_tts, fish_tts, edge_tts, custom_tts, elevenlabs_tts]
+tts_method: 'elevenlabs_tts'
+
+# NoizAI TTS (used by custom_tts)
+# mode: clone = use output/audio/refers/{n}.wav like CosyVoice2; preset = fixed voice_id
+noiz_tts:
+  api_key: 'YOUR_API_KEY'
+  voice_id: 'c1083343'
+  mode: 'clone'
+  target_lang: 'zh'
+  speed: 1.0
+  similarity_enh: true
+  max_workers: 4
+
+# ElevenLabs TTS
+# clone creates a temporary voice from the exact timestamp reference and deletes it after TTS
+elevenlabs_tts:
+  api_key: 'YOUR_API_KEY'
+  voice_id: ''
+  mode: 'clone'
+  model_id: 'eleven_v3'
+  output_format: 'mp3_44100_128'
+  stability: 0.5
+  similarity_boost: 0.8
+  style: 0.0
+  use_speaker_boost: true
+  max_workers: 4
+
+# LLM speaker/utterance tagging for SRT dubbing
+speaker_tagging:
+  enabled: true
+  min_confidence: 0.8
+  max_gap: 1.0
+
+# Final audio mastering and original-audio passthrough
+audio_mastering:
+  target_lufs: -16.0
+  voice_lufs: -18.0
+  true_peak: -1.0
+  loudness_range: 11.0
+  crossfade_ms: 50
+  audio_bitrate: '160k'
+  original_audio_intervals:
+    - [7.58, 13.30]
 
 # SiliconFlow FishTTS
 sf_fish_tts:

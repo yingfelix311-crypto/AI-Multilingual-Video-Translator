@@ -19,7 +19,7 @@ console = Console()
 
 TEMP_FILE_TEMPLATE = f"{_AUDIO_TMP_DIR}/{{}}_temp.wav"
 OUTPUT_FILE_TEMPLATE = f"{_AUDIO_SEGS_DIR}/{{}}.wav"
-WARMUP_SIZE = 5
+WARMUP_SIZE = 0
 
 def parse_df_srt_time(time_str: str) -> float:
     """Convert SRT time format to seconds"""
@@ -93,8 +93,16 @@ def generate_tts_audio(tasks_df: pd.DataFrame) -> pd.DataFrame:
                 rprint(f"[red]❌ Error in warmup: {str(e)}[/red]")
                 raise e
         
-        # for gpt_sovits, do not use parallel to avoid mistakes
-        max_workers = load_key("max_workers") if load_key("tts_method") != "gpt_sovits" else 1
+        # GPT-SoVITS is local and stateful. Noiz custom_tts supports bounded concurrency.
+        tts_method = load_key("tts_method")
+        if tts_method == "gpt_sovits":
+            max_workers = 1
+        elif tts_method == "custom_tts":
+            max_workers = load_key("noiz_tts.max_workers")
+        elif tts_method == "elevenlabs_tts":
+            max_workers = load_key("elevenlabs_tts.max_workers")
+        else:
+            max_workers = load_key("max_workers")
         # parallel processing for remaining tasks
         if len(tasks_df) > warmup_size:
             remaining_tasks = tasks_df.iloc[warmup_size:].copy()
@@ -214,7 +222,7 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
     rprint("[bold green]✅ Audio chunks processing completed![/bold green]")
     return tasks_df
 
-def gen_audio() -> None:
+def gen_audio(force=False):
     """Main function: Generate audio and process timeline"""
     rprint("[bold magenta]🚀 Starting audio generation process...[/bold magenta]")
     
@@ -225,6 +233,15 @@ def gen_audio() -> None:
     # 📝 Step2: Load task file
     tasks_df = pd.read_excel(_8_1_AUDIO_TASK)
     rprint("[green]📊 Loaded task file successfully[/green]")
+
+    if force:
+        for _, row in tasks_df.iterrows():
+            lines = eval(row["lines"]) if isinstance(row["lines"], str) else row["lines"]
+            for line_index in range(len(lines)):
+                temp_file = TEMP_FILE_TEMPLATE.format(f"{row['number']}_{line_index}")
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+        rprint("[yellow]♻️ Existing TTS cache cleared for forced regeneration[/yellow]")
     
     # 🔊 Step3: Generate TTS audio
     tasks_df = generate_tts_audio(tasks_df)

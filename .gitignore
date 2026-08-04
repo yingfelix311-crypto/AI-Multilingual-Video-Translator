@@ -126,6 +126,11 @@ ENV/
 env.bak/
 venv.bak/
 
+# Local API key files (never commit)
+GEMINI_API_KEY
+NOIZ_API_KEY
+*_API_KEY
+
 # Spyder project settings
 .spyderproject
 .spyproject

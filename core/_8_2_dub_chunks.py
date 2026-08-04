@@ -188,8 +188,13 @@ def gen_dub_chunks():
             match_indices.append(i)
             
             if current == target:
-                df.at[idx, 'lines'] = matches
-                df.at[idx, 'src_lines'] = [ori_content_lines[i] for i in match_indices]
+                if "speaker" in df.columns and pd.notna(row.get("speaker")):
+                    # LLM-confirmed utterance groups must be synthesized once.
+                    df.at[idx, 'lines'] = [row["text"]]
+                    df.at[idx, 'src_lines'] = [row["origin"]]
+                else:
+                    df.at[idx, 'lines'] = matches
+                    df.at[idx, 'src_lines'] = [ori_content_lines[i] for i in match_indices]
                 last_idx = i + 1
                 break
         else:  # If no match is found

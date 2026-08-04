@@ -1,3 +1,4 @@
+from pathlib import Path
 from ruamel.yaml import YAML
 import threading
 
@@ -6,6 +7,16 @@ lock = threading.Lock()
 
 yaml = YAML()
 yaml.preserve_quotes = True
+
+_PLACEHOLDER_KEYS = {
+    "",
+    "YOUR_API_KEY",
+    "YOUR_302_API_KEY",
+    "YOUR_SF_KEY",
+    "your_302_api_key",
+    "your_elevenlabs_api_key",
+    "your_noiz_api_key",
+}
 
 # -----------------------
 # load & update config
@@ -23,6 +34,20 @@ def load_key(key):
             value = value[k]
         else:
             raise KeyError(f"Key '{k}' not found in configuration")
+    return value
+
+
+def load_secret(key, key_file=None):
+    """Load a secret from config, falling back to a local key file if needed."""
+    value = load_key(key)
+    if isinstance(value, str) and value.strip() not in _PLACEHOLDER_KEYS:
+        return value.strip()
+    if key_file:
+        path = Path(key_file)
+        if path.is_file():
+            file_value = path.read_text(encoding="utf-8").strip()
+            if file_value:
+                return file_value
     return value
 
 def update_key(key, new_value):

@@ -42,7 +42,9 @@ def _load_cache(prompt, resp_type, log_title):
 
 @except_handler("GPT request failed", retry=5)
 def ask_gpt(prompt, resp_type=None, valid_def=None, log_title="default"):
-    if not load_key("api.key"):
+    from core.utils.config_utils import load_secret
+    api_key = load_secret("api.key", "GEMINI_API_KEY")
+    if not api_key or api_key in ("YOUR_API_KEY",):
         raise ValueError("API key is not set")
     # check cache
     cached = _load_cache(prompt, resp_type, log_title)
@@ -56,7 +58,7 @@ def ask_gpt(prompt, resp_type=None, valid_def=None, log_title="default"):
         base_url = "https://ark.cn-beijing.volces.com/api/v3" # huoshan base url
     elif 'v1' not in base_url:
         base_url = base_url.strip('/') + '/v1'
-    client = OpenAI(api_key=load_key("api.key"), base_url=base_url)
+    client = OpenAI(api_key=api_key, base_url=base_url)
     response_format = {"type": "json_object"} if resp_type == "json" and load_key("api.llm_support_json") else None
 
     messages = [{"role": "user", "content": prompt}]

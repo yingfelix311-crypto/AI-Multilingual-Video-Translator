@@ -74,7 +74,7 @@ def prepare_audio_for_asr(audio_file: str):
         rprint(f"[green]🎵 Prepared <{audio_file}> as <{_RAW_AUDIO_FILE}>\n[/green]")
 
 def get_audio_duration(audio_file: str) -> float:
-    """Get the duration of an audio file using ffmpeg."""
+    """Get the duration of an audio file using ffmpeg, with pydub fallback."""
     cmd = ['ffmpeg', '-i', audio_file]
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     _, stderr = process.communicate()
@@ -84,10 +84,18 @@ def get_audio_duration(audio_file: str) -> float:
         duration_str = [line for line in output.split('\n') if 'Duration' in line][0]
         duration_parts = duration_str.split('Duration: ')[1].split(',')[0].split(':')
         duration = float(duration_parts[0])*3600 + float(duration_parts[1])*60 + float(duration_parts[2])
+        if duration > 0:
+            return duration
+    except Exception:
+        pass
+
+    try:
+        duration = len(AudioSegment.from_file(audio_file)) / 1000.0
+        if duration > 0:
+            return duration
     except Exception as e:
         print(f"[red]❌ Error: Failed to get audio duration: {e}[/red]")
-        duration = 0
-    return duration
+    return 0
 
 def split_audio(audio_file: str, target_len: float = 30*60, win: float = 60) -> List[Tuple[float, float]]:
     ## 在 [target_len-win, target_len+win] 区间内用 pydub 检测静默，切分音频

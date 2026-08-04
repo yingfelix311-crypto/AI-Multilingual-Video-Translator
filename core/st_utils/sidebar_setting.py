@@ -55,6 +55,11 @@ def page_setting():
     #     config_input(t("Cookies Path"), "youtube.cookies_path")
 
     with st.expander(t("LLM Configuration"), expanded=True):
+        from core.utils.config_utils import load_secret
+        api_key_resolved = load_secret("api.key", "GEMINI_API_KEY")
+        api_key_display = load_key("api.key")
+        if api_key_display in ("", "YOUR_API_KEY") and api_key_resolved not in ("", "YOUR_API_KEY"):
+            st.caption("Using API key from GEMINI_API_KEY file")
         config_input(t("API_KEY"), "api.key", placeholder=t("Enter your API key"))
         config_input(
             t("BASE_URL"),
@@ -240,6 +245,7 @@ def page_setting():
             "edge_tts",
             "gpt_sovits",
             "custom_tts",
+            "elevenlabs_tts",
             "sf_cosyvoice2",
             "f5tts",
         ]
@@ -250,7 +256,8 @@ def page_setting():
             "sf_fish_tts": t("SiliconFlow Fish TTS"),
             "edge_tts": t("Edge TTS"),
             "gpt_sovits": t("GPT-SoVITS"),
-            "custom_tts": t("Custom TTS"),
+            "custom_tts": "NoizAI TTS",
+            "elevenlabs_tts": "ElevenLabs TTS",
             "sf_cosyvoice2": t("SiliconFlow CosyVoice2"),
             "f5tts": t("F5-TTS"),
         }
@@ -333,6 +340,102 @@ def page_setting():
 
         elif select_tts == "edge_tts":
             config_input(t("Edge TTS Voice"), "edge_tts.voice")
+
+        elif select_tts == "elevenlabs_tts":
+            from core.utils.config_utils import load_secret
+            elevenlabs_key = load_secret("elevenlabs_tts.api_key", "ELEVENLABS_API_KEY")
+            if (
+                load_key("elevenlabs_tts.api_key") in ("", "YOUR_API_KEY")
+                and elevenlabs_key not in ("", "YOUR_API_KEY")
+            ):
+                st.caption("Using API key from ELEVENLABS_API_KEY file")
+            config_input("ElevenLabs API Key", "elevenlabs_tts.api_key")
+
+            mode_options = {
+                "clone": "Clone exact timestamp reference",
+                "preset": "Preset voice_id",
+            }
+            current_mode = load_key("elevenlabs_tts.mode")
+            selected_mode = st.selectbox(
+                "ElevenLabs Mode",
+                options=list(mode_options.keys()),
+                format_func=lambda x: mode_options[x],
+                index=list(mode_options.keys()).index(current_mode),
+            )
+            if selected_mode != current_mode:
+                update_key("elevenlabs_tts.mode", selected_mode)
+                st.rerun()
+            if selected_mode == "preset":
+                config_input("ElevenLabs Voice ID", "elevenlabs_tts.voice_id")
+            config_input("ElevenLabs Model ID", "elevenlabs_tts.model_id")
+
+        elif select_tts == "custom_tts":
+            from core.utils.config_utils import load_secret
+            noiz_key = load_secret("noiz_tts.api_key", "NOIZ_API_KEY")
+            if load_key("noiz_tts.api_key") in ("", "YOUR_API_KEY") and noiz_key not in ("", "YOUR_API_KEY"):
+                st.caption("Using API key from NOIZ_API_KEY file")
+            config_input("NoizAI API Key", "noiz_tts.api_key")
+
+            mode_options = {
+                "clone": "Clone from video (refers/)",
+                "preset": "Preset voice_id",
+            }
+            current_mode = load_key("noiz_tts.mode")
+            if current_mode not in mode_options:
+                current_mode = "clone"
+            selected_mode = st.selectbox(
+                "NoizAI Mode",
+                options=list(mode_options.keys()),
+                format_func=lambda x: mode_options[x],
+                index=list(mode_options.keys()).index(current_mode),
+                help="Clone uses output/audio/refers/{n}.wav per sentence, like CosyVoice2",
+            )
+            if selected_mode != load_key("noiz_tts.mode"):
+                update_key("noiz_tts.mode", selected_mode)
+                st.rerun()
+
+            if selected_mode == "preset":
+                config_input("NoizAI Voice ID", "noiz_tts.voice_id")
+            else:
+                speaker_tagging = st.toggle(
+                    "Merge continuous lines by speaker",
+                    value=bool(load_key("speaker_tagging.enabled")),
+                    help="Gemini identifies speakers and merges only high-confidence continuous utterances",
+                )
+                if speaker_tagging != load_key("speaker_tagging.enabled"):
+                    update_key("speaker_tagging.enabled", speaker_tagging)
+                    st.rerun()
+
+                if speaker_tagging:
+                    min_confidence = st.slider(
+                        "Speaker merge confidence",
+                        min_value=0.5,
+                        max_value=1.0,
+                        value=float(load_key("speaker_tagging.min_confidence")),
+                        step=0.05,
+                    )
+                    if min_confidence != load_key("speaker_tagging.min_confidence"):
+                        update_key("speaker_tagging.min_confidence", min_confidence)
+                        st.rerun()
+
+                    max_gap = st.slider(
+                        "Maximum continuous gap (seconds)",
+                        min_value=0.0,
+                        max_value=3.0,
+                        value=float(load_key("speaker_tagging.max_gap")),
+                        step=0.1,
+                    )
+                    if max_gap != load_key("speaker_tagging.max_gap"):
+                        update_key("speaker_tagging.max_gap", max_gap)
+                        st.rerun()
+            config_input("NoizAI Target Lang", "noiz_tts.target_lang")
+            similarity_enh = st.toggle(
+                "NoizAI Similarity Enhance",
+                value=bool(load_key("noiz_tts.similarity_enh")),
+            )
+            if similarity_enh != load_key("noiz_tts.similarity_enh"):
+                update_key("noiz_tts.similarity_enh", similarity_enh)
+                st.rerun()
 
         elif select_tts == "sf_cosyvoice2":
             config_input(t("SiliconFlow API Key"), "sf_cosyvoice2.api_key")

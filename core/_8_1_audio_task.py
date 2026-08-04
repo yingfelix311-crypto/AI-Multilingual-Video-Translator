@@ -5,6 +5,7 @@ from rich.console import Console
 from rich.panel import Panel
 from core.prompts import get_subtitle_trim_prompt
 from core.tts_backend.estimate_duration import init_estimator, estimate_duration
+from core.speaker_tagging import load_speaker_tags, tag_srt_speakers
 from core.utils import *
 from core.utils.models import *
 
@@ -48,6 +49,65 @@ def time_diff_seconds(t1, t2, base_date):
     dt1 = datetime.datetime.combine(base_date, t1)
     dt2 = datetime.datetime.combine(base_date, t2)
     return (dt2 - dt1).total_seconds()
+
+def _speaker_tagging_enabled():
+    try:
+        return bool(load_key("speaker_tagging.enabled"))
+    except KeyError:
+        return False
+
+def _merge_speaker_utterances(df, tags):
+    """Merge only LLM-confirmed continuations from the same speaker."""
+    min_confidence = load_key("speaker_tagging.min_confidence")
+    max_gap = load_key("speaker_tagging.max_gap")
+    today = datetime.date.today()
+    grouped = []
+
+    for row in df.to_dict("records"):
+        tag = tags.get(row["number"], {})
+        row["speaker"] = tag.get("speaker", f"unknown_{row['number']}")
+        row["speaker_confidence"] = float(tag.get("confidence", 0))
+        row["merge_with_previous"] = bool(tag.get("merge_with_previous", False))
+        row["source_numbers"] = [row["number"]]
+
+        should_merge = False
+        if grouped and row["merge_with_previous"]:
+            previous = grouped[-1]
+            gap = time_diff_seconds(
+                previous["end_time"],
+                row["start_time"],
+                today,
+            )
+            should_merge = (
+                row["speaker"] == previous["speaker"]
+                and row["speaker_confidence"] >= min_confidence
+                and previous["speaker_confidence"] >= min_confidence
+                and -0.5 <= gap <= max_gap
+            )
+
+        if should_merge:
+            previous = grouped[-1]
+            previous["text"] += " " + row["text"]
+            previous["origin"] += " " + row["origin"]
+            previous["end_time"] = row["end_time"]
+            previous["duration"] = time_diff_seconds(
+                previous["start_time"],
+                previous["end_time"],
+                today,
+            )
+            previous["speaker_confidence"] = min(
+                previous["speaker_confidence"],
+                row["speaker_confidence"],
+            )
+            previous["source_numbers"].append(row["number"])
+            rprint(
+                f"[green]Merging same-speaker utterance cues "
+                f"{previous['source_numbers']} ({previous['speaker']})[/green]"
+            )
+        else:
+            grouped.append(row)
+
+    return pd.DataFrame(grouped)
 
 def process_srt():
     """Process srt file, generate audio tasks"""
@@ -99,29 +159,38 @@ def process_srt():
     
     df = pd.DataFrame(subtitles)
     
-    i = 0
-    MIN_SUB_DUR = load_key("min_subtitle_duration")
-    while i < len(df):
-        today = datetime.date.today()
-        if df.loc[i, 'duration'] < MIN_SUB_DUR:
-            if i < len(df) - 1 and time_diff_seconds(df.loc[i, 'start_time'],df.loc[i+1, 'start_time'],today) < MIN_SUB_DUR:
-                rprint(f"[bold yellow]Merging subtitles {i+1} and {i+2}[/bold yellow]")
-                df.loc[i, 'text'] += ' ' + df.loc[i+1, 'text']
-                df.loc[i, 'origin'] += ' ' + df.loc[i+1, 'origin']
-                df.loc[i, 'end_time'] = df.loc[i+1, 'end_time']
-                df.loc[i, 'duration'] = time_diff_seconds(df.loc[i, 'start_time'],df.loc[i, 'end_time'],today)
-                df = df.drop(i+1).reset_index(drop=True)
-            else:
-                if i < len(df) - 1:  # Not the last audio
-                    rprint(f"[bold blue]Extending subtitle {i+1} duration to {MIN_SUB_DUR} seconds[/bold blue]")
-                    df.loc[i, 'end_time'] = (datetime.datetime.combine(today, df.loc[i, 'start_time']) + 
-                                            datetime.timedelta(seconds=MIN_SUB_DUR)).time()
-                    df.loc[i, 'duration'] = MIN_SUB_DUR
+    tags = {}
+    if _speaker_tagging_enabled():
+        tags = load_speaker_tags()
+        if not tags:
+            tags = tag_srt_speakers()
+
+    if tags:
+        df = _merge_speaker_utterances(df, tags)
+    else:
+        i = 0
+        MIN_SUB_DUR = load_key("min_subtitle_duration")
+        while i < len(df):
+            today = datetime.date.today()
+            if df.loc[i, 'duration'] < MIN_SUB_DUR:
+                if i < len(df) - 1 and time_diff_seconds(df.loc[i, 'start_time'],df.loc[i+1, 'start_time'],today) < MIN_SUB_DUR:
+                    rprint(f"[bold yellow]Merging subtitles {i+1} and {i+2}[/bold yellow]")
+                    df.loc[i, 'text'] += ' ' + df.loc[i+1, 'text']
+                    df.loc[i, 'origin'] += ' ' + df.loc[i+1, 'origin']
+                    df.loc[i, 'end_time'] = df.loc[i+1, 'end_time']
+                    df.loc[i, 'duration'] = time_diff_seconds(df.loc[i, 'start_time'],df.loc[i, 'end_time'],today)
+                    df = df.drop(i+1).reset_index(drop=True)
                 else:
-                    rprint(f"[bold red]The last subtitle {i+1} duration is less than {MIN_SUB_DUR} seconds, but not extending[/bold red]")
+                    if i < len(df) - 1:  # Not the last audio
+                        rprint(f"[bold blue]Extending subtitle {i+1} duration to {MIN_SUB_DUR} seconds[/bold blue]")
+                        df.loc[i, 'end_time'] = (datetime.datetime.combine(today, df.loc[i, 'start_time']) +
+                                                datetime.timedelta(seconds=MIN_SUB_DUR)).time()
+                        df.loc[i, 'duration'] = MIN_SUB_DUR
+                    else:
+                        rprint(f"[bold red]The last subtitle {i+1} duration is less than {MIN_SUB_DUR} seconds, but not extending[/bold red]")
+                    i += 1
+            else:
                 i += 1
-        else:
-            i += 1
     
     df['start_time'] = df['start_time'].apply(lambda x: x.strftime('%H:%M:%S.%f')[:-3])
     df['end_time'] = df['end_time'].apply(lambda x: x.strftime('%H:%M:%S.%f')[:-3])
