@@ -194,6 +194,7 @@ const state = {
   job: null,
   speakers: null,
   tasks: null,
+  alignment: null,
   loudness: null,
   loudnessBusy: false,
   lastJobKey: null,
@@ -206,6 +207,10 @@ const state = {
   speakerUI: null,
   taskUI: null,
   candidateChoice: {},
+  cueCaret: null,
+  cueSplitting: null,
+  usage: null,
+  pendingKeepOriginal: [],
 };
 
 const cfg = (key) => (state.config ? state.config.values[key] : undefined);
@@ -284,12 +289,11 @@ const UPLOADS = [
   },
   {
     id: "trans",
-    title: "译文字幕",
-    hint: "配音用的目标语言字幕。",
+    title: "译文字幕（可选）",
+    hint: "有译文走导入模式；不上传则视频直入（Qwen 转写+翻译）。",
     accept: ".srt",
     url: "/api/upload/srt?kind=trans",
     removable: "/api/upload/srt?kind=trans",
-    required: true,
   },
   {
     id: "src",
@@ -370,7 +374,32 @@ function uploadChip(card, summary) {
   return el("span", { class: "chip" }, el("span", { class: "chip-dot" }), "可选");
 }
 
+function renderPrepareModeChip() {
+  const host = byId("prepare-mode-chip");
+  if (!host) return;
+  const ws = state.workspace;
+  if (!ws || !ws.media) {
+    replace(host, el("span", { class: "chip" }, el("span", { class: "chip-dot" }), "上传视频后选择模式"));
+    return;
+  }
+  const mode = ws.prepare_mode || (ws.uploads && ws.uploads.trans ? "import" : "video_only");
+  if (mode === "import") {
+    replace(
+      host,
+      el("span", { class: "chip chip-ok" }, el("span", { class: "chip-dot" }), "导入字幕模式"),
+      el("span", { class: "chip" }, el("span", { class: "chip-dot" }), "准备后可选修复时间轴")
+    );
+  } else {
+    replace(
+      host,
+      el("span", { class: "chip chip-ok" }, el("span", { class: "chip-dot" }), "视频直入模式"),
+      el("span", { class: "chip" }, el("span", { class: "chip-dot" }), "Qwen 转写 · 自动对齐")
+    );
+  }
+}
+
 function renderUploads() {
+  renderPrepareModeChip();
   replace(
     byId("upload-grid"),
     UPLOADS.map((card) => {
@@ -496,6 +525,7 @@ async function doUpload(card, file) {
     await request.done;
     delete state.transfers[card.id];
     await refreshStatus();
+    await refreshStages();
     toast(`${file.name} 上传完成`);
   } catch (error) {
     delete state.transfers[card.id];
@@ -508,6 +538,7 @@ async function doRemove(card) {
   try {
     await api(card.removable, { method: "DELETE" });
     await refreshStatus();
+    await refreshStages();
     toast("已移除");
   } catch (error) {
     toast(error.message, "error");
@@ -760,8 +791,18 @@ function stageReadiness(stage) {
   if (!ws) return { ready: false, reason: "读取工作区…", done: false };
   if (stage.name === "prepare") {
     if (!ws.media) return { ready: false, reason: "先上传原视频", done: false };
-    if (!ws.uploads.trans) return { ready: false, reason: "先上传译文 SRT", done: false };
+    if (ws.prepare_mode === "import") {
+      const alignedReady = ws.prepared.alignment_ready;
+      const decided = ws.alignment && ws.alignment.mode;
+      return {
+        ready: true,
+        done: Boolean(alignedReady && (decided || ws.prepared.tasks_ready)),
+      };
+    }
     return { ready: true, done: ws.prepared.tasks_ready && ws.prepared.refer_count > 0 };
+  }
+  if (ws.alignment && ws.alignment.decision_pending) {
+    return { ready: false, reason: "先完成时间轴决策", done: false };
   }
   if (!ws.prepared.tasks_ready) return { ready: false, reason: "先完成准备阶段", done: false };
   return { ready: true, done: ws.dubbed.done && ws.dubbed.video_ready };
@@ -946,6 +987,7 @@ function ensureSpeakerDraft() {
     reason: cue.reason || "",
     manual_override: !!cue.manual_override,
   }));
+  state.pendingKeepOriginal = [];
   autoSuggestDraftMerges();
   state.speakerSelected = new Set();
 }
@@ -971,7 +1013,9 @@ function cueComparable(cue) {
 }
 
 function cueDraftSummary() {
-  if (!state.speakerDraft || !state.speakers) return { added: 0, modified: 0, deleted: 0, total: 0 };
+  if (!state.speakerDraft || !state.speakers) {
+    return { added: 0, modified: 0, deleted: 0, keep_original: 0, total: 0 };
+  }
   const originals = new Map(state.speakers.cues.map((cue) => [String(cue.cue), cue]));
   const present = new Set();
   let added = 0;
@@ -985,8 +1029,20 @@ function cueDraftSummary() {
     present.add(item.source_id);
     if (JSON.stringify(cueComparable(item)) !== JSON.stringify(cueComparable(original))) modified += 1;
   }
-  const deleted = [...originals.keys()].filter((id) => !present.has(id)).length;
-  return { added, modified, deleted, total: added + modified + deleted };
+  const keepOriginal = (state.pendingKeepOriginal || []).length;
+  // Pending keep-original cues are removed from the draft, so they already count
+  // as deleted relative to the original set; surface them separately in the chip.
+  const deleted = Math.max(
+    0,
+    [...originals.keys()].filter((id) => !present.has(id)).length - keepOriginal
+  );
+  return {
+    added,
+    modified,
+    deleted,
+    keep_original: keepOriginal,
+    total: added + modified + deleted + keepOriginal,
+  };
 }
 
 function parseSrtTime(value) {
@@ -1015,7 +1071,7 @@ function localSpeakerErrors() {
     const end = parseSrtTime(item.end);
     if (start === null) fields.start = "时间格式应为 HH:MM:SS,mmm";
     if (end === null) fields.end = "时间格式应为 HH:MM:SS,mmm";
-    if (start !== null && end !== null && start >= end) fields.end = "结束时间必须晚于开始时间";
+    // end <= start is auto-repaired on apply (merge into same-speaker neighbor or drop).
     if (end !== null && duration && end > duration + 0.001) fields.end = "超出媒体时长";
     if (!(item.text || "").trim()) fields.text = "译文不能为空";
     if (!(item.speaker || "").trim()) fields.speaker = "人物不能为空";
@@ -1036,10 +1092,39 @@ function localSpeakerErrors() {
   return errors;
 }
 
+function isFillerCueText(text) {
+  const cleaned = String(text || "")
+    .replace(/[^\p{L}\p{N}]/gu, "")
+    .trim()
+    .toLowerCase();
+  if (!cleaned) return false;
+  return /^(?:嗯+|啊+|哼+|哦+|噢+|呃+|嘿+|唉+|咦+|哇+|嗨+|哈+|m+h*m*|u+h+|u+m+|a+h+|o+h+|h+m+|huh|hmph|hah?|heh|meh)$/u.test(
+    cleaned
+  );
+}
+
 function localCueWarnings() {
   const warnings = {};
   const draft = state.speakerDraft || [];
+  for (const item of draft) {
+    const start = parseSrtTime(item.start);
+    const end = parseSrtTime(item.end);
+    if (start !== null && end !== null && start >= end) {
+      warnings[item._id] = "时长无效：应用时将并入相邻同角色字幕，否则删除";
+      continue;
+    }
+    if (
+      start !== null &&
+      end !== null &&
+      end - start > 0 &&
+      end - start <= 0.35 &&
+      (isFillerCueText(item.origin) || isFillerCueText(item.text))
+    ) {
+      warnings[item._id] = "短语气词：应用时能并入相邻同角色则合并，否则删除并保留原人声";
+    }
+  }
   for (let index = 1; index < draft.length; index += 1) {
+    if (warnings[draft[index]._id]) continue;
     const start = parseSrtTime(draft[index].start);
     const previousEnd = parseSrtTime(draft[index - 1].end);
     if (start !== null && previousEnd !== null && start < previousEnd) {
@@ -1079,6 +1164,7 @@ function setDraftMerge(ids, merge) {
 
 function discardSpeakerDraft() {
   state.speakerDraft = null;
+  state.pendingKeepOriginal = [];
   ensureSpeakerDraft();
   renderSpeakers();
 }
@@ -1126,6 +1212,56 @@ function addSpeakerCue(afterId) {
   requestAnimationFrame(() => document.querySelector(`[data-cue-id="${id}"][data-field="text"]`)?.focus());
 }
 
+async function splitSpeakerCue(id) {
+  const draft = state.speakerDraft || [];
+  const index = draft.findIndex((item) => item._id === id);
+  if (index < 0) return;
+  const item = draft[index];
+  if (state.cueCaret?.id !== id) {
+    toast("请先在该条的「原」文本中点击要分句的位置", "error");
+    return;
+  }
+
+  state.cueSplitting = id;
+  renderSpeakers();
+  try {
+    const result = await sendJSON("/api/cues/split", "POST", {
+      start: item.start,
+      end: item.end,
+      text: item.text,
+      origin: item.origin || item.text,
+      split_index: state.cueCaret.index,
+    });
+    const rightId = `new-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    draft.splice(
+      index,
+      1,
+      { ...item, ...result.left, manual_override: true, confidence: 1 },
+      {
+        ...item,
+        ...result.right,
+        _id: rightId,
+        source_id: rightId,
+        cue: null,
+        merge_with_previous: false,
+        force_unmerge: false,
+        manual_override: true,
+        confidence: 1,
+      }
+    );
+    state.cueCaret = null;
+    sortSpeakerDraft();
+    autoSuggestDraftMerges();
+    (result.warnings || []).forEach((message) => toast(message, "error"));
+    if (!(result.warnings || []).length) toast("已分句，时间戳按字级对齐推算");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    state.cueSplitting = null;
+    renderSpeakers();
+  }
+}
+
 function deleteSpeakerCue(id) {
   if (state.speakerDraft.length === 1) {
     toast("至少需要保留一条字幕", "error");
@@ -1135,6 +1271,29 @@ function deleteSpeakerCue(id) {
   state.speakerSelected.delete(id);
   autoSuggestDraftMerges();
   renderSpeakers();
+}
+
+async function keepOriginalTasks(numbers) {
+  const selected = [...new Set((numbers || []).map((n) => Number(n)).filter(Boolean))];
+  if (!selected.length) return toast("请先选择任务", "error");
+  const confirmed = await askModal({
+    title: selected.length === 1 ? `任务 ${selected[0]} 保留原人声？` : `保留 ${selected.length} 条任务的原人声？`,
+    note: "这些任务将从配音列表移除，合片时对应时段播放原人声，不再生成 TTS。字幕文本不会删除。",
+    confirmText: "保留原人声",
+    danger: true,
+  });
+  if (!confirmed) return;
+  try {
+    const result = await sendJSON("/api/tasks/keep-original", "POST", { numbers: selected });
+    for (const number of selected) state.taskSelected.delete(number);
+    await refreshTables();
+    await refreshStatus();
+    toast(
+      `已保留原人声 ${result.removed_numbers?.length || selected.length} 条；请点「重新合片」`
+    );
+  } catch (error) {
+    toast(error.message, "error");
+  }
 }
 
 function syncCueDraftControls() {
@@ -1151,7 +1310,9 @@ function syncCueDraftControls() {
   }
   if (discard) discard.disabled = jobBusy() || !summary.total;
   if (chip) {
-    chip.textContent = `草稿：新增 ${summary.added} · 修改 ${summary.modified} · 删除 ${summary.deleted}`;
+    chip.textContent =
+      `草稿：新增 ${summary.added} · 修改 ${summary.modified} · 删除 ${summary.deleted}` +
+      (summary.keep_original ? ` · 保留原人声 ${summary.keep_original}` : "");
     chip.hidden = !summary.total;
   }
 }
@@ -1166,15 +1327,22 @@ async function applySpeakerDraft() {
   const summary = cueDraftSummary();
   const confirmed = await askModal({
     title: "应用字幕校正并重建任务？",
-    note: `新增 ${summary.added}、修改 ${summary.modified}、删除 ${summary.deleted}。现有任务音频、候选和手工参考将被清理；旧成片会保留并标记为过期。`,
+    note:
+      `新增 ${summary.added}、修改 ${summary.modified}、删除 ${summary.deleted}` +
+      (summary.keep_original ? `、保留原人声 ${summary.keep_original}` : "") +
+      "。现有任务音频、候选和手工参考将被清理；旧成片会保留并标记为过期。",
     confirmText: "应用并重建",
     danger: true,
   });
   if (!confirmed) return;
   try {
-    const snapshot = await sendJSON("/api/speakers/apply", "POST", { cues: state.speakerDraft });
+    const snapshot = await sendJSON("/api/speakers/apply", "POST", {
+      cues: state.speakerDraft,
+      keep_original: state.pendingKeepOriginal || [],
+    });
     state.job = snapshot;
     state.speakerSelected = new Set();
+    state.pendingKeepOriginal = [];
     renderSpeakers();
     renderStages();
     schedulePoll(true);
@@ -1183,6 +1351,164 @@ async function applySpeakerDraft() {
     toast(error.message, "error");
     renderSpeakers();
   }
+}
+
+function fmtDelta(seconds) {
+  const value = Number(seconds) || 0;
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}s`;
+}
+
+async function refreshAlignment() {
+  try {
+    state.alignment = await api("/api/alignment");
+  } catch (error) {
+    state.alignment = null;
+  }
+  renderAlignment();
+}
+
+async function applyAlignmentRepair() {
+  const ok = await askModal({
+    title: "按字级对齐修复时间轴？",
+    body: "将改写字幕起止时间并重建全部配音任务与参考音频；文本不会改变。",
+    confirm: "修复并重建",
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    const snapshot = await sendJSON("/api/alignment/apply", "POST", {});
+    state.job = snapshot;
+    renderAlignment();
+    renderStages();
+    schedulePoll(true);
+    toast("开始按对齐修复时间轴…");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function skipAlignmentRepair() {
+  const ok = await askModal({
+    title: "保持原时间轴？",
+    body: "不改字幕时间，空档原人声将使用保守静音余量，随后生成配音任务。",
+    confirm: "保持原时间轴",
+  });
+  if (!ok) return;
+  try {
+    const snapshot = await sendJSON("/api/alignment/skip", "POST", {});
+    state.job = snapshot;
+    renderAlignment();
+    renderStages();
+    schedulePoll(true);
+    toast("保持原时间轴，开始生成任务…");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function renderAlignment() {
+  const section = byId("section-alignment");
+  if (!section) return;
+  const data = state.alignment;
+  const ws = state.workspace;
+  const proposal = data && data.proposal;
+  const pending = ws && ws.alignment && ws.alignment.decision_pending;
+  const modeHint = (data && data.mode) || (ws && ws.alignment && ws.alignment.mode);
+  // Show whenever a proposal exists and the import gate still needs a choice,
+  // or after a choice so the user can see what was applied.
+  const show = Boolean(proposal && (pending || modeHint || (data && data.mode)));
+  if (!show) {
+    section.hidden = true;
+    syncNavAvailability();
+    return;
+  }
+  section.hidden = false;
+  syncNavAvailability();
+
+  const mode = (data && data.mode) || (ws.alignment && ws.alignment.mode);
+  const items = (proposal && proposal.items) || [];
+  const changed = items.filter((item) => item.changed);
+
+  replace(
+    byId("alignment-summary"),
+    el("span", { class: "chip" }, el("span", { class: "chip-dot" }), `${proposal.cue_count || items.length} 条字幕`),
+    el(
+      "span",
+      { class: changed.length ? "chip chip-warn" : "chip chip-ok" },
+      el("span", { class: "chip-dot" }),
+      `${proposal.changed_count || changed.length} 条建议调整`
+    ),
+    mode
+      ? el(
+          "span",
+          { class: "chip chip-ok" },
+          el("span", { class: "chip-dot" }),
+          mode === "aligned" ? "已选：最佳对齐" : "已选：保守方案"
+        )
+      : el("span", { class: "chip chip-warn" }, el("span", { class: "chip-dot" }), "待选择")
+  );
+
+  const busy = jobBusy() && state.job && ["alignment_apply", "alignment_skip"].includes(state.job.name);
+  replace(
+    byId("alignment-toolbar"),
+    el("button", {
+      class: "btn",
+      text: "按对齐修复（最佳）",
+      disabled: busy || Boolean(mode),
+      onclick: () => applyAlignmentRepair(),
+    }),
+    el("button", {
+      class: "btn btn-ghost",
+      text: "保持原时间轴（保守）",
+      disabled: busy || Boolean(mode),
+      onclick: () => skipAlignmentRepair(),
+    })
+  );
+
+  renderMiniJob("alignment-job", ["alignment_apply", "alignment_skip"]);
+
+  const rows = (changed.length ? changed : items).slice(0, 80).map((item) =>
+    el(
+      "tr",
+      {},
+      el("td", { text: String(item.cue) }),
+      el("td", { text: item.text || "" }),
+      el(
+        "td",
+        { class: "mono", text: `${item.old_start.toFixed(2)} → ${item.old_end.toFixed(2)}` }
+      ),
+      el(
+        "td",
+        { class: "mono", text: `${item.new_start.toFixed(2)} → ${item.new_end.toFixed(2)}` }
+      ),
+      el(
+        "td",
+        {
+          class: item.changed ? "mono warn" : "mono",
+          text: `${fmtDelta(item.start_delta)} / ${fmtDelta(item.end_delta)}`,
+        }
+      )
+    )
+  );
+
+  replace(
+    byId("alignment-table"),
+    el(
+      "thead",
+      {},
+      el(
+        "tr",
+        {},
+        el("th", { text: "#" }),
+        el("th", { text: "文本" }),
+        el("th", { text: "当前时间" }),
+        el("th", { text: "建议时间" }),
+        el("th", { text: "偏移（起/止）" })
+      )
+    ),
+    el("tbody", {}, rows.length ? rows : el("tr", {}, el("td", { colspan: "5", text: "无需调整" })))
+  );
 }
 
 function renderSpeakers() {
@@ -1202,7 +1528,7 @@ function renderSpeakers() {
   const warnings = localCueWarnings();
   const summary = cueDraftSummary();
   const dirty = summary.total;
-  const busy = jobBusy();
+  const busy = jobBusy() || !!state.cueSplitting;
   const names = speakerNameOptions();
 
   const chips = [
@@ -1414,8 +1740,16 @@ function renderSpeakers() {
           error[field] ? el("span", { class: "field-error-text", text: error[field] }) : null
         );
 
-      const textInput = (field, label, placeholder) =>
-        el(
+      const textInput = (field, label, placeholder) => {
+        // Track the caret while it moves: clicking the split button blurs the
+        // textarea and triggers a re-render, so reading it on click is too late.
+        const trackCaret =
+          field === "origin"
+            ? (event) => {
+                state.cueCaret = { id: item._id, index: event.target.selectionStart };
+              }
+            : null;
+        return el(
           "label",
           { class: "cue-text-field" },
           el("span", { class: "cue-field-label", text: label }),
@@ -1430,12 +1764,17 @@ function renderSpeakers() {
             oninput: (event) => {
               item[field] = event.target.value;
               event.target.classList.toggle("is-dirty", true);
+              if (trackCaret) trackCaret(event);
               syncCueDraftControls();
             },
+            onclick: trackCaret,
+            onkeyup: trackCaret,
+            onselect: trackCaret,
             onblur: () => setTimeout(renderSpeakers, 0),
           }),
           error[field] ? el("span", { class: "field-error-text", text: error[field] }) : null
         );
+      };
 
       const row = el(
         "tr",
@@ -1493,6 +1832,17 @@ function renderSpeakers() {
         el(
           "td",
           { class: "actions cue-actions" },
+          el("button", {
+            class: "btn btn-ghost",
+            type: "button",
+            text: "在光标处分句",
+            title: "在「原」文本中点击分句位置，时间戳按字级对齐自动推算",
+            disabled: busy,
+            // Keep focus in the textarea so blurring does not re-render the row
+            // out from under this click and drop the caret.
+            onmousedown: (event) => event.preventDefault(),
+            onclick: () => splitSpeakerCue(item._id),
+          }),
           el("button", {
             class: "btn btn-ghost",
             type: "button",
@@ -2179,6 +2529,12 @@ function renderTasks() {
     class: "btn btn-ghost",
     onclick: () => regenerateSelectedTasks([...selected]),
   });
+  const keepOriginalBtn = el("button", {
+    class: "btn btn-ghost",
+    text: "批量保留原人声",
+    title: "选中任务不走 TTS，合片时该时段播放原人声",
+    onclick: () => keepOriginalTasks([...selected]),
+  });
   const remasterBtn = el("button", {
     class: "btn btn-primary",
     text: pendingCount ? `重新合片（${pendingCount}）` : "重新合片",
@@ -2189,7 +2545,7 @@ function renderTasks() {
   state.taskUI = {
     count: countNode,
     headCheck,
-    needsSelection: [pickRefBtn, restoreBtn, regenBtn],
+    needsSelection: [pickRefBtn, restoreBtn, regenBtn, keepOriginalBtn],
     rows: [],
     total: tasks.length,
     regenBtn,
@@ -2213,6 +2569,7 @@ function renderTasks() {
     }),
     restoreBtn,
     el("span", { class: "sep" }),
+    keepOriginalBtn,
     regenBtn,
     remasterBtn
   );
@@ -2341,6 +2698,14 @@ function renderTasks() {
             disabled: busy,
             "aria-label": `用 LLM 缩短任务 ${task.number} 的字幕并生成候选`,
             onclick: () => generateOptimizedCandidate(task.number),
+          }),
+          el("button", {
+            class: "btn btn-ghost btn-sm",
+            text: "保留原人声",
+            disabled: busy,
+            title: "该任务不走 TTS，合片时播放原人声",
+            "aria-label": `任务 ${task.number} 保留原人声`,
+            onclick: () => keepOriginalTasks([task.number]),
           })
         )
       );
@@ -2531,14 +2896,44 @@ async function measureLoudness() {
 // Hero, nav, footer
 // ------------
 
+function fmtMoney(value, currency) {
+  const amount = Number(value) || 0;
+  if (currency === "USD") return `$${amount.toFixed(amount < 0.01 && amount > 0 ? 4 : 2)}`;
+  return `¥${amount.toFixed(amount < 0.01 && amount > 0 ? 4 : 2)}`;
+}
+
+function renderUsage() {
+  const chip = byId("usage-chip");
+  if (!chip) return;
+  const usage = state.usage || {};
+  const gemini = usage.gemini || {};
+  const qwen = usage.qwen || {};
+  const geminiUsd = Number(gemini.cost_usd) || 0;
+  const qwenCny = Number(qwen.cost_cny) || 0;
+  const geminiTokens = Number(gemini.total_tokens) || 0;
+  const qwenSeconds = Number(qwen.seconds) || 0;
+  chip.title = [
+    usage.note || "用量来自 API 返回；金额按官方标价估算",
+    `Gemini ${gemini.calls || 0} 次 · ${geminiTokens} tokens`,
+    `Qwen ${qwen.calls || 0} 次 · ${qwenSeconds.toFixed(1)}s 音频`,
+    `约合 ¥${(Number(usage.total_cny_approx) || 0).toFixed(2)}`,
+  ].join("\n");
+  chip.textContent = `Gemini ${fmtMoney(geminiUsd, "USD")} · Qwen ${fmtMoney(qwenCny, "CNY")}`;
+}
+
 function renderHero() {
   const ws = state.workspace;
   if (!ws) return;
+  const usage = state.usage || {};
+  const geminiUsd = Number(usage.gemini?.cost_usd) || 0;
+  const qwenCny = Number(usage.qwen?.cost_cny) || 0;
   const stats = [
     ["MEDIA", ws.media ? fmtClock(ws.media.duration) : "—"],
     ["CUES", ws.prepared.cue_count || (ws.uploads.trans ? ws.uploads.trans.cue_count : 0) || "—"],
     ["TTS TASKS", ws.dubbed.segment_count || ws.prepared.refer_count || "—"],
     ["ENGINE", engineLabel()],
+    ["GEMINI", fmtMoney(geminiUsd, "USD")],
+    ["QWEN", fmtMoney(qwenCny, "CNY")],
   ];
   replace(
     byId("hero-stats"),
@@ -2629,6 +3024,16 @@ async function refreshConfig() {
   renderFooter();
 }
 
+async function refreshStages() {
+  try {
+    state.stages = (await api("/api/stages")).stages;
+  } catch (error) {
+    toast(error.message, "error");
+    return;
+  }
+  renderStages();
+}
+
 async function refreshTables() {
   try {
     [state.speakers, state.tasks] = await Promise.all([api("/api/speakers"), api("/api/tasks")]);
@@ -2637,6 +3042,7 @@ async function refreshTables() {
     return;
   }
   // Speaker draft is reset only when cue set changes (handled in ensureSpeakerDraft).
+  await refreshAlignment();
   renderSpeakers();
   renderTasks();
 }
@@ -2646,8 +3052,10 @@ async function refreshStatus() {
   const previous = state.job;
   state.workspace = payload.workspace;
   state.job = payload.job;
+  state.usage = payload.usage || null;
 
   renderHero();
+  renderUsage();
   renderNav();
   renderUploads();
   renderStages();
@@ -2656,11 +3064,22 @@ async function refreshStatus() {
 
   const jobKey = `${state.job.name}:${state.job.state}`;
   const jobChanged = jobKey !== state.lastJobKey;
-  const taskJobs = ["rebuild_speakers", "regenerate", "candidate", "remaster", "dub", "prepare"];
+  const taskJobs = [
+    "rebuild_speakers",
+    "regenerate",
+    "candidate",
+    "remaster",
+    "dub",
+    "prepare",
+    "alignment_apply",
+    "alignment_skip",
+  ];
   // Only rebuild editable tables when job activity changes, so inputs keep focus.
   if (jobChanged || (state.job && taskJobs.includes(state.job.name) && jobBusy())) {
     renderMiniJob("speaker-job", ["rebuild_speakers"]);
     renderMiniJob("task-job", ["regenerate", "candidate", "remaster", "dub"]);
+    renderMiniJob("alignment-job", ["alignment_apply", "alignment_skip"]);
+    renderAlignment();
   }
 
   if (jobChanged) {
@@ -2670,7 +3089,10 @@ async function refreshStatus() {
       (previous.state === "running" || previous.state === "paused") &&
       !["running", "paused"].includes(state.job.state);
     if (finished) {
-      if (state.job.name === "rebuild_speakers") state.speakerDraft = null;
+      if (state.job.name === "rebuild_speakers") {
+        state.speakerDraft = null;
+        state.pendingKeepOriginal = [];
+      }
       await refreshTables();
       await refreshConfig();
       if (state.job.state === "completed") {
@@ -2686,7 +3108,17 @@ async function refreshStatus() {
         } else if (state.job.name === "candidate") {
           toast(`候选配音已就绪，可试听对比（${fmtSecs(state.job.elapsed)}）`);
         } else if (state.job.name === "prepare") {
-          toast(`准备完成，耗时 ${fmtSecs(state.job.elapsed)}`);
+          await refreshStages();
+          const pending = state.workspace && state.workspace.alignment && state.workspace.alignment.decision_pending;
+          toast(
+            pending
+              ? `准备完成，请选择是否修复时间轴（${fmtSecs(state.job.elapsed)}）`
+              : `准备完成，耗时 ${fmtSecs(state.job.elapsed)}`
+          );
+        } else if (state.job.name === "alignment_apply") {
+          toast(`时间轴已按对齐修复，任务已重建（${fmtSecs(state.job.elapsed)}）`);
+        } else if (state.job.name === "alignment_skip") {
+          toast(`已保持原时间轴，任务已生成（${fmtSecs(state.job.elapsed)}）`);
         } else if (state.job.name === "rebuild_speakers") {
           toast(`人物修改已应用，任务已重建（${fmtSecs(state.job.elapsed)}）`);
         }

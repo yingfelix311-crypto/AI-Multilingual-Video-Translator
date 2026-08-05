@@ -77,6 +77,14 @@ def ask_gpt(prompt, resp_type=None, valid_def=None, log_title="default"):
         resp = json_repair.loads(resp_content)
     else:
         resp = resp_content
+
+    # Real token usage from the vendor response (cache hits never reach here).
+    try:
+        from core.utils.api_usage import record_gemini_usage
+
+        record_gemini_usage(model, getattr(resp_raw, "usage", None))
+    except Exception as exc:
+        rprint(f"[yellow]⚠️ Failed to record Gemini usage: {exc}[/yellow]")
     
     # check if the response format is valid
     if valid_def:

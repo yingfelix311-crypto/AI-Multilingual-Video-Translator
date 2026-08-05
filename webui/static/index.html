@@ -24,10 +24,12 @@
       <a href="#section-input">素材</a>
       <a href="#section-config">设置</a>
       <a href="#section-run">运行</a>
+      <a href="#section-alignment">对齐</a>
       <a href="#section-speakers">人物</a>
       <a href="#section-output">成片</a>
     </nav>
     <div class="nav-actions">
+      <span class="chip" id="usage-chip" title="用量来自 API 返回；金额按官方标价估算">Gemini $0 · Qwen ¥0</span>
       <span class="chip" id="nav-chip" hidden></span>
       <button class="btn btn-ghost" id="reset-btn">归档并重置</button>
     </div>
@@ -52,8 +54,9 @@
   <section class="band" id="section-input">
     <div class="band-head">
       <h2><span class="band-step" aria-hidden="true">01</span>输入素材</h2>
-      <p class="band-desc">译文 SRT 是必需的；原文 SRT 可选，缺省时用译文镜像。SRT 超出视频时长的部分会自动截断。</p>
+      <p class="band-desc" id="input-band-desc">只需原视频即可走「视频直入」全流程；若已有译文字幕，上传后进入导入模式并可选按字级对齐修复时间轴。</p>
     </div>
+    <div class="chip-row" id="prepare-mode-chip"></div>
     <div class="grid grid-3" id="upload-grid"></div>
   </section>
 
@@ -81,9 +84,22 @@
     <div class="grid grid-2" id="stage-grid"></div>
   </section>
 
+  <section class="band" id="section-alignment" hidden>
+    <div class="band-head">
+      <h2><span class="band-step" aria-hidden="true">05</span>字级对齐时间轴</h2>
+      <p class="band-desc">对比导入字幕与字级对齐时间。选择修复后走最佳空档保留方案；保持原时间轴则走保守方案。</p>
+    </div>
+    <div id="alignment-summary" class="chip-row"></div>
+    <div class="toolbar" id="alignment-toolbar"></div>
+    <div class="card card-wide" id="alignment-job" hidden></div>
+    <div class="table-wrap">
+      <table class="table" id="alignment-table"></table>
+    </div>
+  </section>
+
   <section class="band" id="section-speakers" hidden>
     <div class="band-head">
-      <h2><span class="band-step" aria-hidden="true">05</span>字幕片段校正</h2>
+      <h2><span class="band-step" aria-hidden="true">06</span>字幕片段校正</h2>
       <p class="band-desc">在草稿中校正时间、译文、原文和人物，可新增或删除片段；应用后统一重建配音任务。</p>
     </div>
     <div id="speaker-summary" class="chip-row"></div>
@@ -96,7 +112,7 @@
 
   <section class="band" id="section-tasks" hidden>
     <div class="band-head">
-      <h2><span class="band-step" aria-hidden="true">06</span>配音任务</h2>
+      <h2><span class="band-step" aria-hidden="true">07</span>配音任务</h2>
       <p class="band-desc">可改字幕文本；单条重生成先出候选供试听，采用后再统一合片。</p>
     </div>
     <div class="toolbar" id="task-toolbar"></div>
@@ -108,7 +124,7 @@
 
   <section class="band" id="section-output" hidden>
     <div class="band-head">
-      <h2><span class="band-step" aria-hidden="true">07</span>成片与产物</h2>
+      <h2><span class="band-step" aria-hidden="true">08</span>成片与产物</h2>
     </div>
     <div class="output-layout">
       <div class="card card-flush" id="output-player"></div>
@@ -125,7 +141,7 @@
   <div class="footer-inner">
     <div>
       <p class="footer-mark">Noiz <span class="wordmark-sub">Dubbing</span></p>
-      <p class="footer-note">译文字幕直配管线 · Gemini 人物标记 · NoizAI / ElevenLabs 克隆 · EBU R128 母带</p>
+      <p class="footer-note">视频直入 / 导入字幕 · Qwen 字级对齐 · Gemini 人物标记 · NoizAI / ElevenLabs 克隆 · EBU R128 母带</p>
     </div>
     <p class="footer-note" id="footer-engine"></p>
   </div>

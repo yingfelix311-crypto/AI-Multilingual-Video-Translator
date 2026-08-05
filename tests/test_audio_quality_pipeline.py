@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from pydub import AudioSegment
@@ -114,12 +115,44 @@ def test_gap_windows_guard_speech_edges_and_drop_short_fragments(monkeypatch):
         "audio_mastering.gap_vocals_min_duration_ms": 700,
     }
     monkeypatch.setattr(dub_to_vid, "load_key", values.__getitem__)
+    monkeypatch.setattr(dub_to_vid, "_load_alignment_mode", lambda: "conservative")
 
     gaps = dub_to_vid._gap_vocal_intervals(
-        [(2.0, 4.0), (4.3, 5.0), (8.0, 9.0)], 12.0
+        [(2.0, 4.0), (4.3, 5.0), (8.0, 9.0)], 12.0, mode="conservative"
     )
 
     assert gaps == [[0.0, 1.75], [5.25, 7.75], [9.25, 12.0]]
+
+
+def test_aligned_gap_guard_uses_smaller_pad(monkeypatch):
+    from core import _12_dub_to_vid as dub_to_vid
+
+    values = {
+        "audio_mastering.gap_vocals_guard_ms": 250,
+        "audio_mastering.gap_vocals_aligned_guard_ms": 60,
+        "audio_mastering.gap_vocals_merge_ms": 400,
+        "audio_mastering.gap_vocals_min_duration_ms": 200,
+    }
+    monkeypatch.setattr(dub_to_vid, "load_key", values.__getitem__)
+
+    gaps = dub_to_vid._gap_vocal_intervals(
+        [(2.0, 4.0)], 6.0, mode="aligned"
+    )
+
+    assert gaps == [[0.0, 1.94], [4.06, 6.0]]
+
+
+def test_forced_gap_vocals_load_from_preserve_file(tmp_path, monkeypatch):
+    from core import _12_dub_to_vid as dub_to_vid
+
+    path = tmp_path / "preserve_original_intervals.json"
+    path.write_text(
+        json.dumps({"intervals": [[8.36, 8.44], [1.0, 1.0], "bad"]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dub_to_vid, "_PRESERVE_ORIGINAL_INTERVALS_FILE", str(path))
+
+    assert dub_to_vid._load_forced_gap_vocal_intervals() == [[8.36, 8.44]]
 
 
 def test_zero_crossfade_still_builds_valid_gap_window_expression():
@@ -131,7 +164,7 @@ def test_zero_crossfade_still_builds_valid_gap_window_expression():
     assert "/0.000" not in expression
 
 
-def test_speech_intervals_cover_subtitle_windows_not_just_tts(tmp_path, monkeypatch):
+def test_conservative_speech_intervals_cover_subtitle_windows(tmp_path, monkeypatch):
     from core import _12_dub_to_vid as dub_to_vid
 
     src_srt = tmp_path / "src.srt"
@@ -146,7 +179,24 @@ def test_speech_intervals_cover_subtitle_windows_not_just_tts(tmp_path, monkeypa
     )
     monkeypatch.setattr(dub_to_vid, "_load_tts_intervals", lambda: [[2.0, 3.5]])
 
-    assert dub_to_vid._load_original_speech_intervals() == [[2.0, 5.0], [8.0, 9.5]]
+    assert dub_to_vid._load_original_speech_intervals("conservative") == [
+        [2.0, 5.0],
+        [8.0, 9.5],
+    ]
+
+
+def test_aligned_speech_intervals_use_char_alignment(monkeypatch):
+    from core import _12_dub_to_vid as dub_to_vid
+
+    monkeypatch.setattr(
+        dub_to_vid,
+        "_load_char_speech_intervals",
+        lambda: [[0.24, 0.96], [1.28, 2.24]],
+    )
+    assert dub_to_vid._load_original_speech_intervals("aligned") == [
+        [0.24, 0.96],
+        [1.28, 2.24],
+    ]
 
 
 def test_audio_paths_use_lossless_intermediates():

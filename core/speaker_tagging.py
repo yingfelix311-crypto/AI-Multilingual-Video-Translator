@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from core.utils import ask_gpt, load_key, rprint
+from core.utils.models import _2_CLEANED_CHUNKS
 
 
 SPEAKER_TAGS_FILE = "output/audio/speaker_tags.json"
@@ -170,6 +171,239 @@ def save_speaker_tags(items, srt_path="output/trans.srt", tags_path=SPEAKER_TAGS
     return {item["cue"]: item for item in normalized}
 
 
+# ------------
+# Acoustic speaker clusters
+# ------------
+# Dialogue text carries no evidence of who is speaking, so a text-only LLM pass
+# happily labels two characters as one. Diarization cluster ids come from the
+# audio, so they decide speaker identity; the LLM only supplies readable names.
+
+
+def _srt_time_to_seconds(value):
+    hours, minutes, rest = str(value).strip().split(":")
+    seconds, millis = rest.replace(".", ",").split(",")
+    return int(hours) * 3600 + int(minutes) * 60 + int(seconds) + int(millis) / 1000.0
+
+
+def _load_acoustic_words_from_chunks(chunks_path):
+    path = Path(chunks_path)
+    if not path.is_file():
+        return []
+
+    import pandas as pd
+
+    df = pd.read_excel(path)
+    if "speaker_id" not in df.columns:
+        return []
+    words = []
+    for _, row in df.iterrows():
+        speaker = row["speaker_id"]
+        if pd.isna(speaker):
+            continue
+        words.append((float(row["start"]), float(row["end"]), int(speaker)))
+    return words
+
+
+def _load_acoustic_words_from_alignment(alignment_path=None):
+    from core.qwen_align import load_char_alignment
+    from core.utils.models import _CHAR_ALIGNMENT_FILE
+
+    if alignment_path is not None:
+        path = Path(alignment_path)
+        if not path.is_file():
+            return []
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+    else:
+        payload = load_char_alignment()
+        if not payload and not Path(_CHAR_ALIGNMENT_FILE).is_file():
+            return []
+        payload = payload or {}
+
+    words = []
+    for item in payload.get("words") or []:
+        speaker = item.get("speaker_id")
+        if speaker is None:
+            continue
+        try:
+            words.append((float(item["start"]), float(item["end"]), int(speaker)))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return words
+
+
+def _load_acoustic_words(chunks_path=_2_CLEANED_CHUNKS):
+    """Prefer ASR chunk diarization; fall back to char_alignment.json speaker_id."""
+    words = _load_acoustic_words_from_chunks(chunks_path)
+    if words:
+        return words
+    return _load_acoustic_words_from_alignment()
+
+
+def _cue_cluster_ids(cues, words):
+    clusters = {}
+    if not words:
+        return clusters
+    for cue in cues:
+        start = _srt_time_to_seconds(cue["start"])
+        end = _srt_time_to_seconds(cue["end"])
+        totals = {}
+        for word_start, word_end, speaker in words:
+            # Qwen emits zero-length words; give them a floor so they still vote.
+            overlap = min(end, max(word_end, word_start + 0.04)) - max(start, word_start)
+            if overlap > 0:
+                totals[speaker] = totals.get(speaker, 0.0) + overlap
+        if totals:
+            clusters[cue["cue"]] = max(totals, key=totals.get)
+    return clusters
+
+
+def _build_naming_prompt(cues, clusters, samples_per_cluster=12):
+    groups = {}
+    for cue in cues:
+        cluster = clusters.get(cue["cue"])
+        if cluster is None:
+            continue
+        groups.setdefault(cluster, []).append(cue["text"])
+
+    blocks = []
+    for cluster in sorted(groups):
+        lines = groups[cluster][:samples_per_cluster]
+        rendered = "\n".join(f"  - {line}" for line in lines)
+        blocks.append(f"cluster {cluster} ({len(groups[cluster])} lines):\n{rendered}")
+    listing = "\n\n".join(blocks)
+    ids = ", ".join(str(cluster) for cluster in sorted(groups))
+
+    return f"""
+Speaker diarization already grouped these dialogue lines by voice. Each cluster
+is one character. Your only job is to name each cluster.
+
+Rules:
+1. Give every cluster exactly one stable label. Prefer the character's name when
+   the dialogue makes it clear; otherwise use labels like man_1, woman_1, narrator.
+2. Labels must be lowercase snake_case and unique across clusters.
+3. Do not merge, split, reorder, or re-assign clusters. Name what you are given.
+4. Cover exactly these cluster ids: {ids}
+
+Return JSON only:
+{{
+  "speakers": [
+    {{"cluster": 0, "name": "narrator", "reason": "brief reason"}}
+  ]
+}}
+
+Clusters:
+{listing}
+""".strip()
+
+
+def _validate_naming_response(response, expected_clusters):
+    if not isinstance(response, dict) or not isinstance(response.get("speakers"), list):
+        return {"status": "error", "message": "Response must contain a speakers array"}
+
+    actual = []
+    names = []
+    for entry in response["speakers"]:
+        if not isinstance(entry, dict):
+            return {"status": "error", "message": "Each speaker entry must be an object"}
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return {"status": "error", "message": f"Missing name for cluster {entry.get('cluster')}"}
+        actual.append(entry.get("cluster"))
+        names.append(name.strip())
+
+    if sorted(actual, key=lambda v: (v is None, v)) != expected_clusters:
+        return {
+            "status": "error",
+            "message": f"Cluster ids mismatch: expected {expected_clusters}, got {actual}",
+        }
+    if len(set(names)) != len(names):
+        return {"status": "error", "message": f"Cluster names must be unique, got {names}"}
+
+    return {"status": "success", "message": ""}
+
+
+def _name_clusters(cues, clusters):
+    expected = sorted({int(value) for value in clusters.values()})
+
+    def validate(response):
+        return _validate_naming_response(response, expected)
+
+    response = ask_gpt(
+        _build_naming_prompt(cues, clusters),
+        resp_type="json",
+        valid_def=validate,
+        log_title="speaker_naming",
+    )
+    return {
+        int(entry["cluster"]): (entry["name"].strip(), str(entry.get("reason", "")).strip())
+        for entry in response["speakers"]
+    }
+
+
+def _tag_from_clusters(cues, clusters):
+    """Speaker identity comes from audio; the LLM only names the clusters."""
+    names = _name_clusters(cues, clusters)
+    rprint(
+        f"[green]Acoustic speaker clusters named: "
+        f"{ {cluster: name for cluster, (name, _) in names.items()} }[/green]"
+    )
+
+    items = []
+    previous_cluster = None
+    for cue in cues:
+        cluster = clusters.get(cue["cue"])
+        if cluster is None:
+            items.append({
+                "cue": cue["cue"],
+                "speaker": f"unknown_{cue['cue']}",
+                "merge_with_previous": False,
+                "confidence": 0.0,
+                "reason": "No diarization coverage for this cue",
+            })
+            previous_cluster = None
+            continue
+        name, reason = names[int(cluster)]
+        items.append({
+            "cue": cue["cue"],
+            "speaker": name,
+            # Only an intent hint; _8_1_audio_task re-decides using speaker + gap.
+            "merge_with_previous": cluster == previous_cluster,
+            "confidence": 1.0,
+            "reason": reason,
+            "speaker_cluster": int(cluster),
+        })
+        previous_cluster = cluster
+    return items
+
+
+def _tag_from_text(cues):
+    """Fallback when no diarization is available: infer speakers from text alone."""
+    expected_cues = [cue["cue"] for cue in cues]
+
+    def validate(response):
+        return _validate_response(response, expected_cues)
+
+    response = ask_gpt(
+        _build_prompt(cues),
+        resp_type="json",
+        valid_def=validate,
+        log_title="speaker_tagging",
+    )
+    return [
+        {
+            "cue": item["cue"],
+            "speaker": item["speaker"].strip(),
+            "merge_with_previous": item["merge_with_previous"],
+            "confidence": float(item["confidence"]),
+            "reason": str(item.get("reason", "")).strip(),
+        }
+        for item in response["items"]
+    ]
+
+
 def tag_srt_speakers(srt_path="output/trans.srt", tags_path=SPEAKER_TAGS_FILE, force=False):
     srt_file = Path(srt_path)
     if not srt_file.is_file():
@@ -186,27 +420,12 @@ def tag_srt_speakers(srt_path="output/trans.srt", tags_path=SPEAKER_TAGS_FILE, f
             rprint(f"[blue]Using cached LLM speaker tags: {tags_path}[/blue]")
             return cached
 
-    expected_cues = [cue["cue"] for cue in cues]
-
-    def validate(response):
-        return _validate_response(response, expected_cues)
-
-    response = ask_gpt(
-        _build_prompt(cues),
-        resp_type="json",
-        valid_def=validate,
-        log_title="speaker_tagging",
-    )
-
-    items = []
-    for item in response["items"]:
-        items.append({
-            "cue": item["cue"],
-            "speaker": item["speaker"].strip(),
-            "merge_with_previous": item["merge_with_previous"],
-            "confidence": float(item["confidence"]),
-            "reason": str(item.get("reason", "")).strip(),
-        })
+    clusters = _cue_cluster_ids(cues, _load_acoustic_words())
+    if clusters:
+        items = _tag_from_clusters(cues, clusters)
+    else:
+        rprint("[yellow]⚠️ No diarization data, falling back to text-only speaker guessing[/yellow]")
+        items = _tag_from_text(cues)
 
     result = {
         "source_hash": _source_hash(content),

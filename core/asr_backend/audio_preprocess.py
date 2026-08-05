@@ -135,6 +135,50 @@ def split_audio(audio_file: str, target_len: float = 30*60, win: float = 60) -> 
     rprint(f"[green]🎙️ Audio split completed {len(segments)} segments[/green]")
     return segments
 
+# ------------
+# Sentence punctuation recovery
+# ------------
+# Some ASR backends (e.g. Qwen filetrans) put punctuation only in the segment
+# text and return bare words. Losing it collapses the whole transcript into one
+# sentence downstream, so re-attach each punctuation mark to the word before it.
+
+def _attach_sentence_punctuation(segment_text, words):
+    text = str(segment_text or '')
+    if not text or not words:
+        return words
+
+    spans = []
+    cursor = 0
+    for word in words:
+        token = str(word.get('word') or '').strip()
+        if not token:
+            spans.append(None)
+            continue
+        index = text.find(token, cursor)
+        if index < 0:
+            rprint(f"[yellow]⚠️ Cannot locate '{token}' in segment text, keeping words unpunctuated[/yellow]")
+            return words
+        spans.append((index, index + len(token)))
+        cursor = index + len(token)
+
+    enriched = []
+    for position, word in enumerate(words):
+        span = spans[position]
+        if span is None:
+            enriched.append(word)
+            continue
+        next_span = next((s for s in spans[position + 1:] if s is not None), None)
+        tail = text[span[1]:next_span[0]] if next_span else text[span[1]:]
+        tail = tail.strip()
+        if not tail:
+            enriched.append(word)
+            continue
+        updated = dict(word)
+        updated['word'] = f"{word['word']}{tail}"
+        enriched.append(updated)
+    return enriched
+
+
 def process_transcription(result: Dict) -> pd.DataFrame:
     all_words = []
     for segment in result['segments']:
@@ -142,6 +186,8 @@ def process_transcription(result: Dict) -> pd.DataFrame:
         speaker_id = segment.get('speaker_id', None)
 
         words = segment.get('words')
+        if words:
+            words = _attach_sentence_punctuation(segment.get('text'), words)
         if not words:
             # Some ASR backends (e.g. ElevenLabs without word-level timestamps)
             # return segments without per-word entries. Synthesize a single

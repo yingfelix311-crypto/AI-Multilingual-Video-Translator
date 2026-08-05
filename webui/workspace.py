@@ -62,6 +62,12 @@ SECRETS = {
         "config_key": "elevenlabs_tts.api_key",
         "key_file": "ELEVENLABS_API_KEY",
     },
+    "qwen": {
+        "label": "Qwen API Key",
+        "hint": "字级对齐 / 视频直入转写（DashScope）",
+        "config_key": "qwen_asr.api_key",
+        "key_file": "QWEN_API_KEY",
+    },
 }
 
 # ------------
@@ -171,7 +177,8 @@ CONFIG_GROUPS = [
             {"key": "audio_mastering.ducking_attack_ms", "label": "背景避让启动 (ms)", "type": "number", "min": 1, "max": 500, "step": 5},
             {"key": "audio_mastering.ducking_release_ms", "label": "背景避让释放 (ms)", "type": "number", "min": 10, "max": 2000, "step": 10},
             {"key": "audio_mastering.preserve_original_vocals_in_gaps", "label": "TTS 空白处保留原人声", "type": "bool"},
-            {"key": "audio_mastering.gap_vocals_guard_ms", "label": "原人声保护静音余量 (ms)", "type": "number", "min": 0, "max": 1000, "step": 10},
+            {"key": "audio_mastering.gap_vocals_guard_ms", "label": "原人声保护静音余量 (ms，保守)", "type": "number", "min": 0, "max": 1000, "step": 10},
+            {"key": "audio_mastering.gap_vocals_aligned_guard_ms", "label": "原人声保护静音余量 (ms，对齐)", "type": "number", "min": 0, "max": 500, "step": 10},
             {"key": "audio_mastering.gap_vocals_merge_ms", "label": "相邻对白合并间隔 (ms)", "type": "number", "min": 0, "max": 2000, "step": 50},
             {"key": "audio_mastering.gap_vocals_min_duration_ms", "label": "保留原人声最短空档 (ms)", "type": "number", "min": 0, "max": 5000, "step": 100},
             {"key": "audio_mastering.gap_vocals_gain", "label": "空档原人声音量", "type": "number", "min": 0, "max": 1.5, "step": 0.05},
@@ -184,6 +191,20 @@ CONFIG_GROUPS = [
         "fields": [
             {"key": "demucs", "label": "Demucs 人声分离", "type": "bool"},
             {"key": "burn_subtitles", "label": "字幕烧进画面", "type": "bool"},
+            {
+                "key": "whisper.runtime",
+                "label": "转写后端",
+                "type": "select",
+                "options": [
+                    ["qwen", "Qwen（字级对齐，视频直入）"],
+                    ["local", "WhisperX 本地"],
+                    ["cloud", "WhisperX 云端"],
+                    ["elevenlabs", "ElevenLabs"],
+                ],
+            },
+            {"key": "qwen_asr.language", "label": "Qwen 语种", "type": "text"},
+            {"key": "qwen_asr.gcs_bucket", "label": "GCS 存储桶", "type": "text"},
+            {"key": "qwen_asr.gcs_prefix", "label": "GCS 前缀", "type": "text"},
             {"key": "speed_factor.min", "label": "最小变速", "type": "number", "min": 0.5, "max": 1, "step": 0.05},
             {"key": "speed_factor.accept", "label": "可接受变速", "type": "number", "min": 1, "max": 2, "step": 0.05},
             {"key": "speed_factor.max", "label": "最大变速", "type": "number", "min": 1, "max": 2.5, "step": 0.05},
@@ -575,8 +596,19 @@ def _upload_entry(path):
     }
 
 
+def prepare_mode():
+    if UPLOAD_TRANS_SRT.is_file():
+        return "import"
+    return "video_only"
+
+
 def read_state():
     from webui.editing import read_merge_pending
+    from core.srt_timing_repair import load_proposal, read_alignment_mode
+    from core.utils.models import (
+        _CHAR_ALIGNMENT_FILE,
+        _SRT_TIMING_PROPOSAL_FILE,
+    )
 
     media = read_media()
     cues = parse_srt(TRANS_SRT)
@@ -585,6 +617,13 @@ def read_state():
     segs = sorted(Path(_AUDIO_SEGS_DIR).glob("*.wav")) if Path(_AUDIO_SEGS_DIR).is_dir() else []
     merge_pending = read_merge_pending()
     subtitle_stale = Path(_SUBTITLE_STALE_MARKER).is_file()
+    mode = prepare_mode()
+    alignment_mode = read_alignment_mode()
+    proposal = load_proposal()
+    alignment_ready = Path(_CHAR_ALIGNMENT_FILE).is_file() and Path(_SRT_TIMING_PROPOSAL_FILE).is_file()
+    # Pending until the user picks aligned/conservative. Do not hide the gate
+    # just because a leftover tts_tasks.xlsx exists from a previous run.
+    decision_pending = mode == "import" and alignment_ready and not alignment_mode
 
     artifacts = [
         entry
@@ -607,12 +646,23 @@ def read_state():
             "trans": _upload_entry(UPLOAD_TRANS_SRT),
             "src": _upload_entry(UPLOAD_SRC_SRT),
         },
+        "prepare_mode": mode,
         "prepared": {
             "imported": Path(_TEXT_DONE_MARKER).is_file() and bool(cues),
             "cue_count": len(cues),
             "vocal_ready": Path(_VOCAL_AUDIO_FILE).is_file(),
             "tasks_ready": task_file.is_file(),
             "refer_count": len(refers),
+            "alignment_ready": alignment_ready,
+            "alignment_decision_pending": decision_pending,
+        },
+        "alignment": {
+            "mode": (alignment_mode or {}).get("mode"),
+            "source": (alignment_mode or {}).get("source"),
+            "proposal_ready": bool(proposal),
+            "changed_count": (proposal or {}).get("changed_count", 0),
+            "cue_count": (proposal or {}).get("cue_count", 0),
+            "decision_pending": decision_pending,
         },
         "dubbed": {
             "done": Path(_AUDIO_DONE_MARKER).is_file(),
@@ -625,6 +675,22 @@ def read_state():
         },
         "artifacts": artifacts,
         "tts_method": load_key("tts_method"),
+    }
+
+
+def read_alignment():
+    from core.srt_timing_repair import load_proposal, read_alignment_mode, propose_repair
+    from core.qwen_align import load_char_alignment
+
+    proposal = load_proposal()
+    if not proposal and load_char_alignment() and TRANS_SRT.is_file():
+        proposal = propose_repair()
+    mode = read_alignment_mode()
+    return {
+        "mode": (mode or {}).get("mode"),
+        "source": (mode or {}).get("source"),
+        "proposal": proposal,
+        "decision_pending": bool(proposal) and not mode,
     }
 
 

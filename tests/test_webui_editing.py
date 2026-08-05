@@ -118,7 +118,6 @@ def test_validate_cues_sorts_renumbers_mirrors_origin_and_warns_overlap(workspac
     ("change", "message"),
     [
         ({"start": "bad"}, "无效时间"),
-        ({"end": "00:00:00,900"}, "结束时间必须晚于"),
         ({"text": " "}, "译文不能为空"),
         ({"speaker": ""}, "人物不能为空"),
         ({"end": "00:00:06,000"}, "超出媒体时长"),
@@ -129,6 +128,251 @@ def test_validate_cues_rejects_invalid_fields(workspace, change, message):
     items[1].update(change)
     with pytest.raises(ValueError, match=message):
         editing.validate_cue_items(items, media_duration=5)
+
+
+def test_invalid_duration_merges_into_previous_same_speaker(workspace):
+    items = [
+        {
+            "source_id": "a",
+            "start": "00:00:01,000",
+            "end": "00:00:02,000",
+            "text": "Hello",
+            "origin": "你好",
+            "speaker": "alice",
+        },
+        {
+            "source_id": "b",
+            "start": "00:00:02,000",
+            "end": "00:00:02,000",
+            "text": "there",
+            "origin": "啊",
+            "speaker": "alice",
+        },
+    ]
+    result = editing.validate_cue_items(items, media_duration=5)
+    assert len(result["items"]) == 1
+    assert result["items"][0]["text"] == "Hello there"
+    assert result["items"][0]["origin"] == "你好啊"
+    assert any("已合并" in warning for warning in result["warnings"])
+
+
+def test_invalid_duration_merges_into_next_same_speaker(workspace):
+    items = [
+        {
+            "source_id": "a",
+            "start": "00:00:01,000",
+            "end": "00:00:00,500",
+            "text": "Left",
+            "origin": "左",
+            "speaker": "bob",
+        },
+        {
+            "source_id": "b",
+            "start": "00:00:02,000",
+            "end": "00:00:03,000",
+            "text": "Right",
+            "origin": "右",
+            "speaker": "bob",
+        },
+    ]
+    result = editing.validate_cue_items(items, media_duration=5)
+    assert len(result["items"]) == 1
+    assert result["items"][0]["text"] == "Left Right"
+    assert result["items"][0]["origin"] == "左右"
+    assert result["items"][0]["start"] == "00:00:02,000"
+
+
+def test_invalid_duration_deletes_without_same_speaker_neighbor(workspace):
+    items = [
+        {
+            "source_id": "a",
+            "start": "00:00:01,000",
+            "end": "00:00:02,000",
+            "text": "Keep",
+            "origin": "留",
+            "speaker": "alice",
+        },
+        {
+            "source_id": "b",
+            "start": "00:00:02,000",
+            "end": "00:00:02,000",
+            "text": "Drop",
+            "origin": "丢",
+            "speaker": "bob",
+        },
+    ]
+    result = editing.validate_cue_items(items, media_duration=5)
+    assert len(result["items"]) == 1
+    assert result["items"][0]["text"] == "Keep"
+    assert any("已删除" in warning for warning in result["warnings"])
+
+
+def test_short_filler_deletes_and_preserves_original_when_unmergeable(workspace, monkeypatch):
+    monkeypatch.setattr(
+        editing,
+        "_merge_max_gap_seconds",
+        lambda: 1.0,
+    )
+    items = [
+        {
+            "source_id": "a",
+            "start": "00:00:01,000",
+            "end": "00:00:02,000",
+            "text": "Call",
+            "origin": "叫",
+            "speaker": "alice",
+        },
+        {
+            "source_id": "b",
+            "start": "00:00:08,360",
+            "end": "00:00:08,440",
+            "text": "Mm.",
+            "origin": "嗯。",
+            "speaker": "bob",
+        },
+        {
+            "source_id": "c",
+            "start": "00:00:12,000",
+            "end": "00:00:13,000",
+            "text": "Where",
+            "origin": "哪",
+            "speaker": "bob",
+        },
+    ]
+    result = editing.validate_cue_items(items, media_duration=20)
+    assert [item["text"] for item in result["items"]] == ["Call", "Where"]
+    assert result["preserve_original_intervals"] == [[8.36, 8.44]]
+    assert any("保留原人声" in warning for warning in result["warnings"])
+
+
+def test_short_filler_merges_into_nearby_same_speaker(workspace, monkeypatch):
+    monkeypatch.setattr(editing, "_merge_max_gap_seconds", lambda: 1.0)
+    items = [
+        {
+            "source_id": "a",
+            "start": "00:00:01,000",
+            "end": "00:00:02,000",
+            "text": "Hey",
+            "origin": "喂",
+            "speaker": "bob",
+        },
+        {
+            "source_id": "b",
+            "start": "00:00:02,200",
+            "end": "00:00:02,400",
+            "text": "Mm.",
+            "origin": "嗯。",
+            "speaker": "bob",
+        },
+    ]
+    result = editing.validate_cue_items(items, media_duration=5)
+    assert len(result["items"]) == 1
+    assert result["items"][0]["origin"] == "喂嗯。"
+    assert result["preserve_original_intervals"] == []
+
+
+def test_short_real_line_is_kept(workspace, monkeypatch):
+    monkeypatch.setattr(editing, "_merge_max_gap_seconds", lambda: 1.0)
+    items = [
+        {
+            "source_id": "a",
+            "start": "00:00:01,000",
+            "end": "00:00:01,160",
+            "text": "Here!",
+            "origin": "爷爷在此！",
+            "speaker": "bob",
+        }
+    ]
+    result = editing.validate_cue_items(items, media_duration=5)
+    assert len(result["items"]) == 1
+    assert result["items"][0]["origin"] == "爷爷在此！"
+    assert result["preserve_original_intervals"] == []
+
+
+def test_keep_original_flag_peels_cue_into_preserve_intervals(workspace):
+    items = [
+        {
+            "source_id": "a",
+            "start": "00:00:01,000",
+            "end": "00:00:02,000",
+            "text": "Keep TTS",
+            "origin": "留",
+            "speaker": "alice",
+        },
+        {
+            "source_id": "b",
+            "start": "00:00:03,000",
+            "end": "00:00:03,500",
+            "text": "Original",
+            "origin": "原声",
+            "speaker": "bob",
+            "keep_original": True,
+        },
+    ]
+    result = editing.validate_cue_items(items, media_duration=10)
+    assert [item["text"] for item in result["items"]] == ["Keep TTS"]
+    assert result["preserve_original_intervals"] == [[3.0, 3.5]]
+    assert any("保留原人声" in warning for warning in result["warnings"])
+
+
+def test_keep_original_side_list_is_accepted(workspace):
+    items = [
+        {
+            "source_id": "a",
+            "start": "00:00:01,000",
+            "end": "00:00:02,000",
+            "text": "Keep",
+            "origin": "留",
+            "speaker": "alice",
+        }
+    ]
+    result = editing.validate_cue_items(
+        items,
+        media_duration=10,
+        keep_original=[{"start": "00:00:08,360", "end": "00:00:08,440", "origin": "嗯。"}],
+    )
+    assert len(result["items"]) == 1
+    assert result["preserve_original_intervals"] == [[8.36, 8.44]]
+
+
+def test_keep_original_tasks_removes_tts_and_marks_remaster(workspace):
+    import pandas as pd
+
+    Path("output/audio/tts_tasks.xlsx").parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "number": 1,
+                "start_time": "00:00:01.000",
+                "end_time": "00:00:02.000",
+                "text": "Keep",
+                "origin": "留",
+                "speaker": "alice",
+            },
+            {
+                "number": 2,
+                "start_time": "00:00:03.000",
+                "end_time": "00:00:03.500",
+                "text": "Mm",
+                "origin": "嗯",
+                "speaker": "bob",
+            },
+        ]
+    ).to_excel("output/audio/tts_tasks.xlsx", index=False)
+    seg = Path("output/audio/segs/2_0.wav")
+    seg.parent.mkdir(parents=True, exist_ok=True)
+    seg.write_bytes(b"fake")
+
+    result = editing.keep_original_tasks([2])
+
+    assert result["removed_numbers"] == [2]
+    assert result["intervals"] == [[3.0, 3.5]]
+    assert 2 in result["merge_pending"] or 1 in result["merge_pending"]
+    remaining = pd.read_excel("output/audio/tts_tasks.xlsx")
+    assert remaining["number"].tolist() == [1]
+    assert not seg.exists()
+    preserved = json.loads(Path("output/audio/preserve_original_intervals.json").read_text())
+    assert [3.0, 3.5] in preserved["intervals"]
 
 
 def test_apply_cue_draft_syncs_files_and_clears_numbered_artifacts(workspace, monkeypatch):

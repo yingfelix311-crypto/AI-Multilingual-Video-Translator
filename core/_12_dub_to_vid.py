@@ -93,17 +93,63 @@ def _load_tts_intervals():
     return _merge_intervals(intervals)
 
 
-def _load_original_speech_intervals():
-    """Regions where the source video already has dialogue.
+def _load_alignment_mode():
+    from core.srt_timing_repair import read_alignment_mode
 
-    ASR-aligned subtitle windows are authoritative here: the placed TTS audio is
-    often shorter than the line it replaces, so muting only the TTS span leaks
-    the tail of the original delivery back into the mix.
-    """
+    payload = read_alignment_mode() or {}
+    mode = payload.get("mode")
+    if mode in {"aligned", "conservative"}:
+        return mode
+    return "conservative"
+
+
+def _load_char_speech_intervals():
+    from core.qwen_align import char_intervals_from_alignment, load_char_alignment
+
+    alignment = load_char_alignment()
+    if not alignment:
+        raise FileNotFoundError(
+            f"Character alignment required for aligned gap vocals: "
+            f"{Path('output/log/char_alignment.json')}"
+        )
+    intervals = char_intervals_from_alignment(alignment)
+    intervals += [tuple(item) for item in _load_tts_intervals()]
+    return _merge_intervals(intervals)
+
+
+def _load_subtitle_speech_intervals():
+    """Conservative path: subtitle windows plus TTS spans."""
     speech = _parse_srt_intervals(SRC_SUBS_FOR_AUDIO_FILE)
     speech += _parse_srt_intervals(TRANS_SUBS_FOR_AUDIO_FILE)
     speech += [tuple(item) for item in _load_tts_intervals()]
     return _merge_intervals(speech)
+
+
+def _load_original_speech_intervals(mode=None):
+    """Regions where original dialogue must stay muted under gap vocals."""
+    mode = mode or _load_alignment_mode()
+    if mode == "aligned":
+        return _load_char_speech_intervals()
+    return _load_subtitle_speech_intervals()
+
+
+def _load_forced_gap_vocal_intervals():
+    """Windows kept for original vocals after dropping short filler cues."""
+    path = Path(_PRESERVE_ORIGINAL_INTERVALS_FILE)
+    if not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    intervals = []
+    for item in payload.get("intervals") or []:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        start, end = float(item[0]), float(item[1])
+        if end > start:
+            intervals.append([start, end])
+    return intervals
 
 
 def _probe_duration(path):
@@ -121,9 +167,19 @@ def _probe_duration(path):
     return float(result.stdout.strip())
 
 
-def _gap_vocal_intervals(speech_intervals, duration):
+def _gap_vocal_guard_seconds(mode=None):
+    mode = mode or _load_alignment_mode()
+    if mode == "aligned":
+        try:
+            return float(load_key("audio_mastering.gap_vocals_aligned_guard_ms")) / 1000
+        except KeyError:
+            return 0.06
+    return float(load_key("audio_mastering.gap_vocals_guard_ms")) / 1000
+
+
+def _gap_vocal_intervals(speech_intervals, duration, mode=None):
     """Windows where original vocals may play, i.e. no dialogue is dubbed."""
-    guard = float(load_key("audio_mastering.gap_vocals_guard_ms")) / 1000
+    guard = _gap_vocal_guard_seconds(mode)
     join_gap = float(load_key("audio_mastering.gap_vocals_merge_ms")) / 1000
     min_duration = float(load_key("audio_mastering.gap_vocals_min_duration_ms")) / 1000
 
@@ -354,10 +410,29 @@ def merge_video_audio():
         preserve_gap_vocals = False
     gap_vocal_intervals = []
     if preserve_gap_vocals:
-        speech_intervals = _load_original_speech_intervals()
+        alignment_mode = _load_alignment_mode()
+        if alignment_mode == "aligned" and not Path("output/log/char_alignment.json").is_file():
+            raise FileNotFoundError(
+                "alignment_mode is aligned but char_alignment.json is missing; "
+                "re-run prepare alignment or switch to conservative mode."
+            )
+        speech_intervals = _load_original_speech_intervals(alignment_mode)
         gap_vocal_intervals = _gap_vocal_intervals(
-            speech_intervals, _probe_duration(vocal_file)
+            speech_intervals,
+            _probe_duration(vocal_file),
+            mode=alignment_mode,
         )
+        forced_gap_vocals = _load_forced_gap_vocal_intervals()
+        if forced_gap_vocals:
+            join_gap = float(load_key("audio_mastering.gap_vocals_merge_ms")) / 1000
+            gap_vocal_intervals = _merge_intervals(
+                list(gap_vocal_intervals) + forced_gap_vocals,
+                join_gap=join_gap,
+            )
+            rprint(
+                f"[bold blue]Forcing original vocals for "
+                f"{len(forced_gap_vocals)} dropped short filler window(s).[/bold blue]"
+            )
         if not gap_vocal_intervals:
             rprint(
                 "[bold yellow]⚠️ No dialogue-free window is long enough; "
@@ -367,7 +442,7 @@ def merge_video_audio():
         else:
             kept = sum(end - start for start, end in gap_vocal_intervals)
             rprint(
-                f"[bold blue]Preserving original vocals in "
+                f"[bold blue]Preserving original vocals ({alignment_mode}) in "
                 f"{len(gap_vocal_intervals)} dialogue-free windows "
                 f"({kept:.1f}s).[/bold blue]"
             )

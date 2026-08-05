@@ -35,6 +35,11 @@ def transcribe():
     elif runtime == "elevenlabs":
         from core.asr_backend.elevenlabs_asr import transcribe_audio_elevenlabs as ts
         rprint("[cyan]🎤 Transcribing audio with ElevenLabs API...[/cyan]")
+    elif runtime == "qwen":
+        from core.asr_backend.qwen_asr import transcribe_audio_qwen as ts
+        rprint("[cyan]🎤 Transcribing audio with Qwen ASR...[/cyan]")
+    else:
+        raise ValueError(f"Unsupported whisper.runtime: {runtime}")
 
     for start, end in segments:
         check_cancel()

@@ -30,6 +30,7 @@ from core.utils.models import (
     _AUDIO_SEGS_DIR,
     _AUDIO_TMP_DIR,
     _MERGE_PENDING_FILE,
+    _PRESERVE_ORIGINAL_INTERVALS_FILE,
     _SUBTITLE_STALE_MARKER,
 )
 from webui.workspace import (
@@ -173,10 +174,412 @@ def _clean_cue_text(value):
     return " ".join(str(value or "").split()).strip()
 
 
-def validate_cue_items(items, media_duration=None):
+# ------------
+# Manual cue split on the source-language text
+# ------------
+
+
+def _split_translation(origin, text, left_origin, right_origin):
+    """Ask the LLM to re-align the translation onto the two source halves."""
+    from core._5_split_sub import align_subs
+
+    try:
+        _, parts, _ = align_subs(origin, text, f"{left_origin}\n{right_origin}")
+        left, right = _clean_cue_text(parts[0]), _clean_cue_text(parts[1])
+        if left and right:
+            return left, right, []
+        raise ValueError("对齐结果为空")
+    except Exception as error:
+        # Splitting must still succeed; a proportional guess keeps both halves
+        # non-empty and the user can fix the wording inline.
+        ratio = len(left_origin) / max(1, len(left_origin) + len(right_origin))
+        cut = max(1, min(len(text) - 1, int(round(len(text) * ratio))))
+        return (
+            _clean_cue_text(text[:cut]),
+            _clean_cue_text(text[cut:]),
+            [f"译文自动对齐失败（{error}），已按比例粗分，请核对"],
+        )
+
+
+def split_cue_draft(payload):
+    """Split one cue at a caret offset inside its source-language text."""
+    from core.cue_split import split_cue_time, split_origin_text
+
+    start = _parse_srt_seconds(payload.get("start"))
+    end = _parse_srt_seconds(payload.get("end"))
+    if end <= start:
+        raise ValueError("结束时间必须大于开始时间")
+
+    text = _clean_cue_text(payload.get("text"))
+    origin = str(payload.get("origin") or "").strip() or text
+    if not text:
+        raise ValueError("译文不能为空")
+
+    try:
+        split_index = int(payload.get("split_index"))
+    except (TypeError, ValueError):
+        raise ValueError("请先在「原」文本中点击要分句的位置")
+
+    left_origin, right_origin = split_origin_text(origin, split_index)
+    if not left_origin or not right_origin:
+        raise ValueError("分句点必须落在源文中间，不能在首尾")
+
+    left_end, right_start = split_cue_time(origin, start, end, split_index)
+    left_text, right_text, warnings = _split_translation(
+        origin, text, left_origin, right_origin
+    )
+
+    return {
+        "left": {
+            "start": _format_srt_seconds(start),
+            "end": _format_srt_seconds(left_end),
+            "text": left_text,
+            "origin": left_origin,
+        },
+        "right": {
+            "start": _format_srt_seconds(right_start),
+            "end": _format_srt_seconds(end),
+            "text": right_text,
+            "origin": right_origin,
+        },
+        "warnings": warnings,
+    }
+
+
+def _join_cue_fragments(left, right):
+    left = _clean_cue_text(left)
+    right = _clean_cue_text(right)
+    if not left:
+        return right
+    if not right:
+        return left
+    if re.search(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7a3]", left[-1] + right[0]):
+        return left + right
+    return f"{left} {right}"
+
+
+# Short standalone interjections that TTS cannot render cleanly. Prefer merge
+# into a same-speaker neighbor; otherwise drop the cue and keep original vocals.
+SHORT_FILLER_MAX_DURATION = 0.35
+_FILLER_TEXT_RE = re.compile(
+    r"^(?:嗯+|啊+|哼+|哦+|噢+|呃+|嘿+|唉+|咦+|哇+|嗨+|哈+|"
+    r"m+h*m*|u+h+|u+m+|a+h+|o+h+|h+m+|huh|hmph|hah?|heh|meh)$",
+    re.IGNORECASE,
+)
+
+
+def _merge_max_gap_seconds():
+    from core.utils import load_key
+
+    try:
+        return float(load_key("speaker_tagging.tts_merge_max_gap"))
+    except Exception:
+        return 1.0
+
+
+def _is_filler_text(text):
+    cleaned = re.sub(r"[^\w]", "", str(text or ""), flags=re.UNICODE).strip().lower()
+    return bool(cleaned) and bool(_FILLER_TEXT_RE.fullmatch(cleaned))
+
+
+def _neighbors_by_start(kept_sorted, start):
+    previous = None
+    nxt = None
+    for candidate in kept_sorted:
+        if candidate["start"] <= start:
+            previous = candidate
+        else:
+            nxt = candidate
+            break
+    return previous, nxt
+
+
+def _merge_text_into(target, source_raw, prepend):
+    inv_text = source_raw.get("text")
+    inv_origin = source_raw.get("origin") or inv_text
+    if prepend:
+        target["raw"]["text"] = _join_cue_fragments(inv_text, target["raw"].get("text"))
+        target["raw"]["origin"] = _join_cue_fragments(
+            inv_origin, target["raw"].get("origin") or target["raw"].get("text")
+        )
+    else:
+        target["raw"]["text"] = _join_cue_fragments(target["raw"].get("text"), inv_text)
+        target["raw"]["origin"] = _join_cue_fragments(
+            target["raw"].get("origin") or target["raw"].get("text"), inv_origin
+        )
+
+
+def _same_speaker_merge_target(previous, nxt, speaker, start, end, max_gap):
+    """Pick an adjacent same-speaker cue within the merge gap, prefer previous."""
+    if previous and previous["speaker"] == speaker:
+        gap = start - previous["end"]
+        if -0.5 <= gap <= max_gap:
+            return previous, False
+    if nxt and nxt["speaker"] == speaker:
+        gap = nxt["start"] - end
+        if -0.5 <= gap <= max_gap:
+            return nxt, True
+    # Invalid-duration path also allows any same-speaker neighbor (no gap check).
+    return None, False
+
+
+def repair_invalid_duration_cues(items):
+    """
+    Auto-fix cues whose end time is not later than start.
+
+    Prefer merging text into the previous same-speaker neighbor; otherwise the
+    next same-speaker neighbor. With no same-speaker neighbor, drop the cue.
+    """
+    if not isinstance(items, list) or not items:
+        return [], []
+
+    parsed = []
+    for position, raw in enumerate(items, 1):
+        if not isinstance(raw, dict):
+            parsed.append({"raw": raw, "keep": True, "invalid": False, "position": position})
+            continue
+        try:
+            start = _parse_srt_seconds(raw.get("start"))
+            end = _parse_srt_seconds(raw.get("end"))
+        except ValueError:
+            parsed.append({"raw": raw, "keep": True, "invalid": False, "position": position})
+            continue
+        invalid = end <= start
+        parsed.append({
+            "raw": dict(raw),
+            "keep": not invalid,
+            "invalid": invalid,
+            "start": start,
+            "end": end,
+            "speaker": str(raw.get("speaker") or "").strip(),
+            "position": position,
+        })
+
+    kept_sorted = sorted(
+        [item for item in parsed if item["keep"] and "start" in item],
+        key=lambda item: item["start"],
+    )
+    warnings = []
+
+    for item in parsed:
+        if not item["invalid"]:
+            continue
+        previous, nxt = _neighbors_by_start(kept_sorted, item["start"])
+        target = None
+        prepend = False
+        if previous and previous["speaker"] == item["speaker"]:
+            target = previous
+        elif nxt and nxt["speaker"] == item["speaker"]:
+            target = nxt
+            prepend = True
+
+        if target is None:
+            warnings.append(
+                f"第 {item['position']} 行时长无效且无相邻同角色字幕，已删除"
+            )
+            continue
+
+        _merge_text_into(target, item["raw"], prepend)
+        warnings.append(
+            f"第 {item['position']} 行时长无效，已合并到相邻同角色字幕"
+        )
+
+    repaired = [item["raw"] for item in parsed if item["keep"]]
+    return repaired, warnings
+
+
+def repair_short_filler_cues(items):
+    """
+    Drop ultra-short interjections that cannot merge into a neighbor.
+
+    Mergeable fillers are absorbed into the adjacent same-speaker cue. Orphans
+    are deleted so the original vocal can play in that window instead of TTS.
+    """
+    if not isinstance(items, list) or not items:
+        return [], [], []
+
+    max_gap = _merge_max_gap_seconds()
+    parsed = []
+    for position, raw in enumerate(items, 1):
+        if not isinstance(raw, dict):
+            parsed.append({"raw": raw, "keep": True, "drop": False, "position": position})
+            continue
+        try:
+            start = _parse_srt_seconds(raw.get("start"))
+            end = _parse_srt_seconds(raw.get("end"))
+        except ValueError:
+            parsed.append({"raw": raw, "keep": True, "drop": False, "position": position})
+            continue
+        duration = end - start
+        origin = _clean_cue_text(raw.get("origin")) or _clean_cue_text(raw.get("text"))
+        text = _clean_cue_text(raw.get("text"))
+        is_filler = (
+            duration > 0
+            and duration <= SHORT_FILLER_MAX_DURATION
+            and (_is_filler_text(origin) or _is_filler_text(text))
+        )
+        parsed.append({
+            "raw": dict(raw),
+            "keep": True,
+            "drop": is_filler,
+            "start": start,
+            "end": end,
+            "speaker": str(raw.get("speaker") or "").strip(),
+            "position": position,
+        })
+
+    kept_sorted = sorted(
+        [item for item in parsed if (not item["drop"]) and "start" in item],
+        key=lambda item: item["start"],
+    )
+    warnings = []
+    preserve_intervals = []
+
+    for item in parsed:
+        if not item["drop"]:
+            continue
+        previous, nxt = _neighbors_by_start(kept_sorted, item["start"])
+        target, prepend = _same_speaker_merge_target(
+            previous, nxt, item["speaker"], item["start"], item["end"], max_gap
+        )
+        if target is not None:
+            _merge_text_into(target, item["raw"], prepend)
+            item["keep"] = False
+            warnings.append(
+                f"第 {item['position']} 行短语气词已合并到相邻同角色字幕"
+            )
+            continue
+
+        item["keep"] = False
+        preserve_intervals.append([
+            round(float(item["start"]), 3),
+            round(float(item["end"]), 3),
+        ])
+        warnings.append(
+            f"第 {item['position']} 行短语气词无法并入相邻字幕，已删除并保留原人声"
+        )
+
+    repaired = [item["raw"] for item in parsed if item["keep"]]
+    return repaired, warnings, preserve_intervals
+
+
+def _load_preserve_original_intervals():
+    path = Path(_PRESERVE_ORIGINAL_INTERVALS_FILE)
+    if not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    intervals = []
+    for item in payload.get("intervals") or []:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        start, end = float(item[0]), float(item[1])
+        if end > start:
+            intervals.append([round(start, 3), round(end, 3)])
+    return intervals
+
+
+def _merge_preserve_intervals(parts):
+    flat = []
+    for group in parts or []:
+        if not group:
+            continue
+        for item in group:
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                continue
+            start, end = float(item[0]), float(item[1])
+            if end > start:
+                flat.append([start, end])
+    merged = []
+    for start, end in sorted(flat, key=lambda item: item[0]):
+        if merged and start <= merged[-1][1] + 0.02:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([round(start, 3), round(end, 3)])
+    return merged
+
+
+def _write_preserve_original_intervals(intervals, merge_existing=True):
+    path = Path(_PRESERVE_ORIGINAL_INTERVALS_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    groups = [intervals]
+    if merge_existing:
+        groups.append(_load_preserve_original_intervals())
+    payload = {"intervals": _merge_preserve_intervals(groups)}
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload["intervals"]
+
+
+def peel_keep_original_cues(items):
+    """Pull out cues marked keep_original; they leave TTS and keep source vocals."""
+    if not isinstance(items, list) or not items:
+        return [], [], []
+
+    kept = []
+    intervals = []
+    warnings = []
+    for position, raw in enumerate(items, 1):
+        if not isinstance(raw, dict) or not raw.get("keep_original"):
+            kept.append(raw)
+            continue
+        try:
+            start = _parse_srt_seconds(raw.get("start"))
+            end = _parse_srt_seconds(raw.get("end"))
+        except ValueError as exc:
+            raise ValueError(f"第 {position} 行保留原人声失败：{exc}") from exc
+        if end <= start:
+            warnings.append(f"第 {position} 行时长无效，已跳过保留原人声")
+            continue
+        intervals.append([round(start, 3), round(end, 3)])
+        label = _clean_cue_text(raw.get("origin") or raw.get("text")) or f"#{position}"
+        warnings.append(f"第 {position} 行「{label}」已改为保留原人声，不参与 TTS")
+    return kept, intervals, warnings
+
+
+def normalize_keep_original_entries(entries):
+    """Accept a side list of {start,end} from the UI after the cue was removed."""
+    if not entries:
+        return [], []
+    if not isinstance(entries, list):
+        raise ValueError("keep_original 必须是列表")
+    intervals = []
+    warnings = []
+    for position, raw in enumerate(entries, 1):
+        if not isinstance(raw, dict):
+            raise ValueError(f"keep_original 第 {position} 条无效")
+        start = _parse_srt_seconds(raw.get("start"))
+        end = _parse_srt_seconds(raw.get("end"))
+        if end <= start:
+            warnings.append(f"保留原人声第 {position} 条时长无效，已跳过")
+            continue
+        intervals.append([round(start, 3), round(end, 3)])
+        label = _clean_cue_text(raw.get("origin") or raw.get("text")) or f"#{position}"
+        warnings.append(f"「{label}」已改为保留原人声，不参与 TTS")
+    return intervals, warnings
+
+
+def validate_cue_items(items, media_duration=None, keep_original=None):
     """Validate, sort and renumber a complete editable subtitle cue payload."""
     if not isinstance(items, list) or not items:
         raise ValueError("字幕列表不能为空")
+
+    items, repair_warnings = repair_invalid_duration_cues(items)
+    items, keep_intervals, keep_warnings = peel_keep_original_cues(items)
+    extra_intervals, extra_warnings = normalize_keep_original_entries(keep_original)
+    items, filler_warnings, filler_intervals = repair_short_filler_cues(items)
+    repair_warnings = (
+        list(repair_warnings)
+        + list(keep_warnings)
+        + list(extra_warnings)
+        + list(filler_warnings)
+    )
+    preserve_intervals = _merge_preserve_intervals(
+        [keep_intervals, extra_intervals, filler_intervals]
+    )
+    if not items:
+        raise ValueError("有效字幕已全部删除或改为保留原人声，列表不能为空")
 
     normalized = []
     errors = []
@@ -195,6 +598,7 @@ def validate_cue_items(items, media_duration=None):
         origin = _clean_cue_text(raw.get("origin")) or text
         speaker = str(raw.get("speaker") or "").strip()
         if end_seconds <= start_seconds:
+            # Defensive: repair_invalid_duration_cues should have removed these.
             errors.append(f"第 {position} 行结束时间必须晚于开始时间")
         if media_duration is not None and end_seconds > float(media_duration) + 0.001:
             errors.append(f"第 {position} 行结束时间超出媒体时长")
@@ -225,13 +629,8 @@ def validate_cue_items(items, media_duration=None):
         raise ValueError("；".join(errors))
 
     normalized.sort(key=lambda item: (item["start_seconds"], item["end_seconds"]))
-    from core.utils import load_key
-
-    try:
-        max_gap = float(load_key("speaker_tagging.tts_merge_max_gap"))
-    except Exception:
-        max_gap = 1.0
-    warnings = []
+    max_gap = _merge_max_gap_seconds()
+    warnings = list(repair_warnings)
     for index, item in enumerate(normalized):
         item["cue"] = index + 1
         if index == 0:
@@ -259,7 +658,11 @@ def validate_cue_items(items, media_duration=None):
             )
     if errors:
         raise ValueError("；".join(errors))
-    return {"items": normalized, "warnings": warnings}
+    return {
+        "items": normalized,
+        "warnings": warnings,
+        "preserve_original_intervals": preserve_intervals,
+    }
 
 
 def _cues_to_srt(items, field):
@@ -392,9 +795,11 @@ def apply_speaker_tags(items):
     }
 
 
-def apply_cue_draft(items, media_duration=None):
+def apply_cue_draft(items, media_duration=None, keep_original=None):
     """Atomically persist complete cue edits, then rebuild all derived tasks."""
-    result = validate_cue_items(items, media_duration=media_duration)
+    result = validate_cue_items(
+        items, media_duration=media_duration, keep_original=keep_original
+    )
     normalized = result["items"]
     trans_content = _cues_to_srt(normalized, "text")
     src_content = _cues_to_srt(normalized, "origin")
@@ -439,6 +844,7 @@ def apply_cue_draft(items, media_duration=None):
     _clear_dir(OVERRIDE_DIR)
     clear_merge_pending()
     Path(_AUDIO_DONE_MARKER).unlink(missing_ok=True)
+    _write_preserve_original_intervals(result.get("preserve_original_intervals") or [])
     SUBTITLE_STALE_PATH.write_text(
         json.dumps(
             {"cue_count": len(normalized), "updated_at": time.time()},
@@ -459,6 +865,7 @@ def apply_cue_draft(items, media_duration=None):
         "changed_tasks": [item["number"] for item in after],
         "groups": len(after),
         "warnings": result["warnings"],
+        "preserve_original_intervals": result.get("preserve_original_intervals") or [],
         "structure_changed": True,
     }
 
@@ -475,13 +882,18 @@ def rebuild_speaker_steps(items):
     ]
 
 
-def rebuild_cue_steps(items, media_duration=None):
-    payload = {"items": items, "media_duration": media_duration}
+def rebuild_cue_steps(items, media_duration=None, keep_original=None):
+    payload = {
+        "items": items,
+        "media_duration": media_duration,
+        "keep_original": keep_original,
+    }
 
     def step_apply_and_rebuild():
         payload["result"] = apply_cue_draft(
             payload["items"],
             media_duration=payload["media_duration"],
+            keep_original=payload["keep_original"],
         )
 
     return [
@@ -1077,6 +1489,93 @@ def accept_candidate(task_number, candidate_id=None):
         "number": number,
         "accepted": True,
         "text_changed": text_changed,
+        "merge_pending": read_merge_pending(),
+    }
+
+
+def _parse_task_seconds(value):
+    """Parse task sheet times like 00:00:01.100 or 00:00:01,100000."""
+    text = str(value or "").strip()
+    match = re.fullmatch(r"(\d{1,2}):([0-5]\d):([0-5]\d)[,.](\d{1,6})", text)
+    if not match:
+        return _parse_srt_seconds(value)
+    hours, minutes, seconds, frac = match.groups()
+    millis = int((frac + "000")[:3])
+    return int(hours) * 3600 + int(minutes) * 60 + int(seconds) + millis / 1000
+
+
+def keep_original_tasks(numbers):
+    """
+    Drop selected dubbing tasks from TTS and keep original vocals in their windows.
+
+    Subtitle text on disk is left unchanged; only the TTS task sheet and segment
+    audio are removed so remaster can fill those windows from the vocal stem.
+    """
+    if not isinstance(numbers, list) or not numbers:
+        raise ValueError("请先选择要保留原人声的任务")
+
+    wanted = sorted({int(number) for number in numbers})
+    task_file = Path(_8_1_AUDIO_TASK)
+    if not task_file.is_file():
+        raise FileNotFoundError("还没有配音任务")
+
+    import pandas as pd
+
+    df = pd.read_excel(task_file)
+    if "number" not in df.columns:
+        raise ValueError("任务表缺少 number 列")
+
+    present = {int(value) for value in df["number"].tolist()}
+    missing = [number for number in wanted if number not in present]
+    if missing:
+        raise ValueError(f"任务不存在：{', '.join(str(n) for n in missing)}")
+    if len(present) <= len(wanted):
+        raise ValueError("至少需要保留一条配音任务")
+
+    intervals = []
+    removed = []
+    for _, row in df[df["number"].isin(wanted)].iterrows():
+        start = _parse_task_seconds(row.get("start_time"))
+        end = _parse_task_seconds(row.get("end_time"))
+        if end <= start:
+            raise ValueError(f"任务 {int(row['number'])} 时间无效，无法保留原人声")
+        intervals.append([round(start, 3), round(end, 3)])
+        removed.append(
+            {
+                "number": int(row["number"]),
+                "start": start,
+                "end": end,
+                "text": _clean_cue_text(row.get("text")),
+                "origin": _clean_cue_text(row.get("origin")),
+                "speaker": str(row.get("speaker") or "").strip(),
+            }
+        )
+
+    kept = df[~df["number"].isin(wanted)].copy()
+    kept.to_excel(task_file, index=False)
+
+    _clear_tts_cache(wanted)
+    for number in wanted:
+        override = OVERRIDE_DIR / f"{number}.wav"
+        override.unlink(missing_ok=True)
+        if CANDIDATE_DIR.is_dir():
+            for path in CANDIDATE_DIR.glob(f"{number}_*.wav"):
+                path.unlink(missing_ok=True)
+            meta = CANDIDATE_DIR / f"{number}.json"
+            meta.unlink(missing_ok=True)
+
+    written = _write_preserve_original_intervals(intervals, merge_existing=True)
+    remaining = [int(value) for value in kept["number"].tolist()]
+    mark_merge_pending(remaining)
+    Path(_AUDIO_DONE_MARKER).unlink(missing_ok=True)
+    SUBTITLE_STALE_PATH.unlink(missing_ok=True)
+
+    return {
+        "removed": removed,
+        "removed_numbers": wanted,
+        "intervals": intervals,
+        "preserve_original_intervals": written,
+        "task_count": len(remaining),
         "merge_pending": read_merge_pending(),
     }
 

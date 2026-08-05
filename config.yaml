@@ -30,12 +30,26 @@ whisper:
   # Whisper specified recognition language ISO 639-1
   language: 'zh'
   detected_language: 'en'
-  # Whisper running mode ["local", "cloud", "elevenlabs"]. Specifies where to run, cloud uses 302.ai API
-  runtime: 'local'
+  # Whisper running mode ["local", "cloud", "elevenlabs", "qwen"]
+  runtime: 'qwen'
   # 302.ai API key
   whisperX_302_api_key: 'your_302_api_key'
   # ElevenLabs API key (experimental)
   elevenlabs_api_key: 'your_elevenlabs_api_key'
+
+# Qwen ASR / character-level forced alignment via DashScope filetrans
+qwen_asr:
+  api_key: 'your_qwen_api_key'
+  model: 'qwen-audio-3.0-asr-flash-filetrans'
+  language: 'zh'
+  # Speaker diarization is only available on the filetrans v2 family
+  # (qwen-audio-3.0 / fun-asr / paraformer), not on qwen3-asr-flash-filetrans.
+  diarization: true
+  speaker_count: 2
+  gcs_bucket: 'hihub-test'
+  gcs_prefix: 'qwen_asr_align'
+  poll_interval_s: 3
+  poll_timeout_s: 900
 
 # Whether to burn subtitles into the video
 burn_subtitles: false
@@ -122,6 +136,8 @@ audio_mastering:
   preserve_original_vocals_in_gaps: true
   # Guard against ASR boundary drift so original speech tails stay muted
   gap_vocals_guard_ms: 250
+  # Smaller pad used when char-level alignment is available
+  gap_vocals_aligned_guard_ms: 60
   gap_vocals_merge_ms: 400
   gap_vocals_min_duration_ms: 700
   gap_vocals_gain: 0.8

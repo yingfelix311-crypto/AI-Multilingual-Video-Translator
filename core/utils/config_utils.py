@@ -16,6 +16,7 @@ _PLACEHOLDER_KEYS = {
     "your_302_api_key",
     "your_elevenlabs_api_key",
     "your_noiz_api_key",
+    "your_qwen_api_key",
 }
 
 # -----------------------

@@ -28,6 +28,10 @@ _AUDIO_TMP_DIR = "output/audio/tmp"
 _AUDIO_CANDIDATES_DIR = "output/audio/regeneration_candidates"
 _MERGE_PENDING_FILE = "output/audio/merge_pending.json"
 _SUBTITLE_STALE_MARKER = "output/.subtitle_structure_stale"
+_CHAR_ALIGNMENT_FILE = "output/log/char_alignment.json"
+_SRT_TIMING_PROPOSAL_FILE = "output/log/srt_timing_proposal.json"
+_ALIGNMENT_MODE_FILE = "output/audio/alignment_mode.json"
+_PRESERVE_ORIGINAL_INTERVALS_FILE = "output/audio/preserve_original_intervals.json"
 
 # ------------------------------------------
 # Done markers (written by st.py task runner after a stage finishes
@@ -61,6 +65,10 @@ __all__ = [
     "_AUDIO_CANDIDATES_DIR",
     "_MERGE_PENDING_FILE",
     "_SUBTITLE_STALE_MARKER",
+    "_CHAR_ALIGNMENT_FILE",
+    "_SRT_TIMING_PROPOSAL_FILE",
+    "_ALIGNMENT_MODE_FILE",
+    "_PRESERVE_ORIGINAL_INTERVALS_FILE",
     "_TEXT_DONE_MARKER",
     "_AUDIO_DONE_MARKER",
 ]

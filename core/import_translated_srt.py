@@ -218,13 +218,8 @@ def import_translated_srt(
     Path(TRANS_SUBS_FOR_AUDIO).write_text(srt_text, encoding="utf-8")
     Path(SRC_SUBS_FOR_AUDIO).write_text(src_text, encoding="utf-8")
 
-    try:
-        speaker_tagging_enabled = bool(load_key("speaker_tagging.enabled"))
-    except KeyError:
-        speaker_tagging_enabled = False
-    if speaker_tagging_enabled:
-        from core.speaker_tagging import tag_srt_speakers
-        tag_srt_speakers(TRANS_SRT)
+    # Speaker tagging is deferred to after Qwen alignment in import prepare,
+    # so diarization speaker_id from that ASR call can drive the labels.
 
     if media_type == "video":
         convert_video_to_audio(media_path)

@@ -53,12 +53,28 @@ def index():
 
 @app.get("/api/status")
 def status():
-    return _guard(lambda: {"job": jobs.snapshot(), "workspace": workspace.read_state()})
+    def payload():
+        from core.utils.api_usage import read_usage_summary
+
+        return {
+            "job": jobs.snapshot(),
+            "workspace": workspace.read_state(),
+            "usage": read_usage_summary(),
+        }
+
+    return _guard(payload)
+
+
+@app.get("/api/usage")
+def usage():
+    from core.utils.api_usage import read_usage_summary
+
+    return _guard(read_usage_summary)
 
 
 @app.get("/api/stages")
 def stages():
-    return {"stages": pipeline.STAGES}
+    return _guard(lambda: {"stages": pipeline.stages_for_mode(), "mode": pipeline.prepare_mode()})
 
 
 @app.get("/api/speakers")
@@ -185,6 +201,21 @@ def start_dub(payload=Body(default={})):
     return _guard(lambda: jobs.start("dub", pipeline.dub_steps(force=force)))
 
 
+@app.get("/api/alignment")
+def get_alignment():
+    return _guard(workspace.read_alignment)
+
+
+@app.post("/api/alignment/apply")
+def apply_alignment():
+    return _guard(lambda: jobs.start("alignment_apply", pipeline.alignment_apply_steps()))
+
+
+@app.post("/api/alignment/skip")
+def skip_alignment():
+    return _guard(lambda: jobs.start("alignment_skip", pipeline.alignment_skip_steps()))
+
+
 @app.post("/api/jobs/control")
 def control_job(payload=Body(...)):
     return _guard(lambda: jobs.control((payload or {}).get("action")))
@@ -216,6 +247,11 @@ def validate_speakers(payload=Body(...)):
     return _guard(lambda: {"items": editing.validate_speaker_items(body.get("items"))})
 
 
+@app.post("/api/cues/split")
+def split_cue(payload=Body(...)):
+    return _guard(lambda: editing.split_cue_draft(payload or {}))
+
+
 @app.post("/api/speakers/apply")
 def apply_speakers(payload=Body(...)):
     def action():
@@ -224,10 +260,13 @@ def apply_speakers(payload=Body(...)):
         if cues is not None:
             media = workspace.read_media()
             duration = media.get("duration") if media else None
-            editing.validate_cue_items(cues, duration)
+            keep_original = body.get("keep_original")
+            editing.validate_cue_items(cues, duration, keep_original=keep_original)
             return jobs.start(
                 "rebuild_speakers",
-                pipeline.rebuild_cues_steps(cues, media_duration=duration),
+                pipeline.rebuild_cues_steps(
+                    cues, media_duration=duration, keep_original=keep_original
+                ),
             )
         items = body.get("items")
         # Validate synchronously so the UI gets immediate field errors.
@@ -290,6 +329,15 @@ def regenerate_selected(payload=Body(...)):
     def action():
         numbers = editing.validate_task_numbers((payload or {}).get("numbers") or [])
         return jobs.start("regenerate", pipeline.selective_dub_steps(numbers))
+
+    return _guard(action)
+
+
+@app.post("/api/tasks/keep-original")
+def keep_original_tasks(payload=Body(...)):
+    def action():
+        numbers = editing.validate_task_numbers((payload or {}).get("numbers") or [])
+        return editing.keep_original_tasks(numbers)
 
     return _guard(action)
 
