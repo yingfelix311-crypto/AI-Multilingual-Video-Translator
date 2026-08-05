@@ -208,11 +208,8 @@ def test_invalid_duration_deletes_without_same_speaker_neighbor(workspace):
 
 
 def test_short_filler_deletes_and_preserves_original_when_unmergeable(workspace, monkeypatch):
-    monkeypatch.setattr(
-        editing,
-        "_merge_max_gap_seconds",
-        lambda: 1.0,
-    )
+    monkeypatch.setattr(editing, "_merge_max_gap_seconds", lambda: 1.0)
+    monkeypatch.setattr(editing, "_tts_merge_max_gap_seconds", lambda: 1.0)
     items = [
         {
             "source_id": "a",
@@ -247,6 +244,7 @@ def test_short_filler_deletes_and_preserves_original_when_unmergeable(workspace,
 
 def test_short_filler_merges_into_nearby_same_speaker(workspace, monkeypatch):
     monkeypatch.setattr(editing, "_merge_max_gap_seconds", lambda: 1.0)
+    monkeypatch.setattr(editing, "_tts_merge_max_gap_seconds", lambda: 1.0)
     items = [
         {
             "source_id": "a",

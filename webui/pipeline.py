@@ -34,7 +34,7 @@ VIDEO_ONLY_PREPARE_LABELS = [
     "转写人声并生成词级时间戳",
     "分句与翻译",
     "生成字幕并标记为已对齐",
-    "生成配音任务与参考音频",
+    "生成配音任务、情绪标签与参考音频",
 ]
 
 DUB_LABELS = [
@@ -48,11 +48,11 @@ REBUILD_SPEAKERS_LABELS = [
 ]
 
 ALIGNMENT_APPLY_LABELS = [
-    "按字级对齐修复字幕时间轴并重建任务",
+    "按字级对齐修复字幕时间轴并重建任务（含情绪标签）",
 ]
 
 ALIGNMENT_SKIP_LABELS = [
-    "保持原时间轴并生成配音任务",
+    "保持原时间轴并生成配音任务（含情绪标签）",
 ]
 
 
@@ -248,10 +248,12 @@ def _video_only_prepare_steps():
 
     def step_tasks():
         from core import _8_1_audio_task, _8_2_dub_chunks, _9_refer_audio
+        from core.tts_backend.qwen_tts import tag_audio_tasks_emotions
 
         _drop(_8_1_AUDIO_TASK)
         _8_1_audio_task.gen_audio_task_main()
         _8_2_dub_chunks.gen_dub_chunks()
+        tag_audio_tasks_emotions()
         _9_refer_audio.extract_refer_audio_main()
 
     return list(

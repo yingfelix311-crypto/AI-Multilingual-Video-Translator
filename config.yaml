@@ -84,8 +84,8 @@ reflect_translate: true
 pause_before_translate: false
 
 ## ======================== Dubbing Settings ======================== ##
-# TTS selection [sf_fish_tts, openai_tts, gpt_sovits, azure_tts, fish_tts, edge_tts, custom_tts, elevenlabs_tts]
-tts_method: 'custom_tts'
+# TTS selection [sf_fish_tts, openai_tts, gpt_sovits, azure_tts, fish_tts, edge_tts, custom_tts, elevenlabs_tts, qwen_tts]
+tts_method: 'elevenlabs_tts'
 
 # NoizAI TTS (used by custom_tts)
 # mode: clone = use output/audio/refers/{n}.wav like CosyVoice2; preset = fixed voice_id
@@ -110,15 +110,42 @@ elevenlabs_tts:
   similarity_boost: 0.8
   style: 0.0
   use_speaker_boost: true
-  max_workers: 4
+  # Cap at Scale/Business non-Flash concurrency (eleven_v3). Flash/Turbo can go to 30.
+  max_workers: 15
+
+# Qwen-Audio-3.0-TTS (DashScope)
+# mode: clone = enroll temporary voice from refers/{n}.wav then delete; preset = fixed voice
+# api_key falls back to QWEN_API_KEY / qwen_asr.api_key
+qwen_tts:
+  api_key: 'your_qwen_api_key'
+  model: 'qwen-audio-3.0-tts-plus'
+  mode: 'clone'
+  voice: 'longanhuan_v3.6'
+  language_hints: 'zh'
+  speech_rate: 1.0
+  instruction: ''
+  # Stage 1: after audio tasks are built, LLM writes emotion tags into task text.
+  emotion_tags: true
+  enable_preprocess: false
+  max_prompt_audio_length: 10.0
+  # If enrollment ASR rejects the pooled refer, synthesize with qwen_tts.voice instead.
+  fallback_preset_on_clone_fail: true
+  # Clone spends most time waiting DEPLOYING; 6 workers pipeline past the 3 RPS synth cap.
+  # Hard caps (Beijing): TTS submit 3 RPS, voice-enrollment 10 RPS — enforced in code.
+  max_workers: 6
+  base_http_api_url: 'https://dashscope.aliyuncs.com/api/v1'
+  base_websocket_api_url: 'wss://dashscope.aliyuncs.com/api-ws/v1/inference'
 
 # LLM speaker/utterance tagging for SRT dubbing
-# merge_with_previous + tts_merge_max_gap control both reference pooling and TTS source merge
+# Both merges require the same speaker/role.
+# refer_merge_max_gap: pool clone reference audio
+# tts_merge_max_gap: concatenate TTS text into one task (0 = never)
 speaker_tagging:
   enabled: true
   min_confidence: 0.8
-  max_gap: 2  # legacy fallback only; prefer tts_merge_max_gap
-  tts_merge_max_gap: 1.0
+  max_gap: 2  # legacy fallback only
+  refer_merge_max_gap: 3
+  tts_merge_max_gap: 0.6
 
 # Final audio mastering and original-audio passthrough
 audio_mastering:

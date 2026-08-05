@@ -101,6 +101,19 @@ def _synthesize(text, save_path, voice_id):
     audio.export(save_path, format="wav")
     print(f"ElevenLabs audio saved to {save_path} (duration: {len(audio) / 1000:.2f}s)")
 
+    try:
+        from core.utils.api_usage import record_elevenlabs_tts_usage
+
+        model = str(payload.get("model_id") or "")
+        recorded = record_elevenlabs_tts_usage(model, text=text)
+        if recorded:
+            print(
+                f"ElevenLabs TTS usage +{recorded['characters']} chars "
+                f"(${recorded['cost_usd']:.4f})"
+            )
+    except Exception as error:
+        print(f"Warning: failed to record ElevenLabs TTS usage: {error}")
+
 
 def elevenlabs_tts(text, save_path, number=None, task_df=None):
     mode = load_key("elevenlabs_tts.mode")

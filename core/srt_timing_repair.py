@@ -319,6 +319,7 @@ def mark_aligned_from_asr():
 
 def _rebuild_audio_tasks():
     from core import _8_1_audio_task, _8_2_dub_chunks, _9_refer_audio
+    from core.tts_backend.qwen_tts import tag_audio_tasks_emotions
 
     Path(_8_1_AUDIO_TASK).unlink(missing_ok=True)
     _clear_dir(_AUDIO_TMP_DIR)
@@ -326,4 +327,5 @@ def _rebuild_audio_tasks():
     _clear_dir(_AUDIO_CANDIDATES_DIR)
     _8_1_audio_task.gen_audio_task_main()
     _8_2_dub_chunks.gen_dub_chunks()
+    tag_audio_tasks_emotions()
     _9_refer_audio.extract_refer_audio_main()

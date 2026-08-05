@@ -57,28 +57,52 @@ def _speaker_tagging_enabled():
         return False
 
 
-def _merge_max_gap():
-    """Shared gap limit for merge-with-previous (reference + TTS are one decision)."""
-    try:
-        return float(load_key("speaker_tagging.tts_merge_max_gap"))
-    except KeyError:
+def _gap_from_keys(*keys, default=1.0):
+    for key in keys:
         try:
-            return float(load_key("speaker_tagging.max_gap"))
+            return float(load_key(key))
         except KeyError:
-            return 1.0
+            continue
+    return float(default)
+
+
+def _refer_merge_max_gap():
+    """Max silence (seconds) to pool clone reference audio with previous cue."""
+    return _gap_from_keys(
+        "speaker_tagging.refer_merge_max_gap",
+        "speaker_tagging.tts_merge_max_gap",
+        "speaker_tagging.max_gap",
+        default=1.0,
+    )
+
+
+def _tts_merge_max_gap():
+    """Max silence (seconds) to concatenate TTS text with previous cue. 0 = never."""
+    return _gap_from_keys(
+        "speaker_tagging.tts_merge_max_gap",
+        "speaker_tagging.max_gap",
+        default=0.0,
+    )
+
+
+def _same_speaker(left, right):
+    """Both sides must have a non-empty identical speaker label."""
+    a = str((left or {}).get("speaker") or "").strip()
+    b = str((right or {}).get("speaker") or "").strip()
+    if not a or not b:
+        return False
+    if a.lower() in {"nan", "none"} or b.lower() in {"nan", "none"}:
+        return False
+    return a == b
 
 
 def _decide_merge_with_previous(previous, row, max_gap, min_confidence, today):
-    """Same rule for reference pooling and TTS source merge.
-
-    Default is automatic: same speaker within ``tts_merge_max_gap``.
-    Explicit ``force_unmerge`` keeps a cue separate.
-    """
+    """Same-speaker merge decision for one gap threshold. Different roles never merge."""
     if not previous:
         return False
     if bool(row.get("force_unmerge")):
         return False
-    if row["speaker"] != previous["speaker"]:
+    if not _same_speaker(previous, row):
         return False
     gap = time_diff_seconds(previous["end_time"], row["start_time"], today)
     if not (-0.5 <= gap <= max_gap):
@@ -92,9 +116,10 @@ def _decide_merge_with_previous(previous, row, max_gap, min_confidence, today):
 
 
 def _annotate_speaker_cues(df, tags):
-    """Attach speaker metadata and resolve merge-with-previous decisions."""
+    """Attach speaker metadata; resolve refer merge and TTS-text merge separately."""
     min_confidence = float(load_key("speaker_tagging.min_confidence"))
-    max_gap = _merge_max_gap()
+    refer_gap = _refer_merge_max_gap()
+    tts_gap = _tts_merge_max_gap()
     today = datetime.date.today()
     rows = []
 
@@ -105,20 +130,27 @@ def _annotate_speaker_cues(df, tags):
         row["force_unmerge"] = bool(tag.get("force_unmerge", False))
         row["manual_override"] = bool(tag.get("manual_override", False))
         row["source_numbers"] = [row["number"]]
-        # Intent from tags; final value is overwritten by the shared auto rule.
-        row["merge_with_previous"] = bool(tag.get("merge_with_previous", False))
 
         previous = rows[-1] if rows else None
-        merge = _decide_merge_with_previous(
-            previous, row, max_gap, min_confidence, today
+        refer_merge = _decide_merge_with_previous(
+            previous, row, refer_gap, min_confidence, today
         )
-        row["merge_with_previous"] = merge
-        row["reference_merge_with_previous"] = merge
-        if merge:
+        tts_merge = _decide_merge_with_previous(
+            previous, row, tts_gap, min_confidence, today
+        )
+        # UI / speaker-tag field tracks reference pooling intent.
+        row["merge_with_previous"] = refer_merge
+        row["reference_merge_with_previous"] = refer_merge
+        row["tts_merge_with_previous"] = tts_merge
+        if refer_merge or tts_merge:
+            parts = []
+            if refer_merge:
+                parts.append(f"refer<={refer_gap:.2f}s")
+            if tts_merge:
+                parts.append(f"tts-text<={tts_gap:.2f}s")
             rprint(
-                f"[green]Merge-with-previous cue {previous['number']} + "
-                f"{row['number']} ({row['speaker']}, "
-                f"gap<={max_gap:.2f}s)[/green]"
+                f"[green]Merge cue {previous['number']} + {row['number']} "
+                f"({row['speaker']}, {', '.join(parts)})[/green]"
             )
         rows.append(row)
 
@@ -126,14 +158,21 @@ def _annotate_speaker_cues(df, tags):
 
 
 def _merge_tts_by_speaker_gap(df):
-    """Merge TTS sources using the same merge-with-previous decisions."""
+    """Concatenate TTS text only when same speaker and ``tts_merge_with_previous``.
+
+    Reference pooling stays on ``reference_merge_with_previous`` in ``_9_refer_audio``.
+    """
     today = datetime.date.today()
     grouped = []
 
     for row in df.to_dict("records"):
-        should_merge = bool(grouped) and bool(row.get("merge_with_previous"))
+        previous = grouped[-1] if grouped else None
+        should_merge = (
+            previous is not None
+            and bool(row.get("tts_merge_with_previous"))
+            and _same_speaker(previous, row)
+        )
         if should_merge:
-            previous = grouped[-1]
             gap = time_diff_seconds(previous["end_time"], row["start_time"], today)
             previous["text"] += " " + row["text"]
             previous["origin"] += " " + row["origin"]
@@ -146,10 +185,12 @@ def _merge_tts_by_speaker_gap(df):
             previous["source_numbers"].extend(row["source_numbers"])
             previous["tts_merge_count"] = len(previous["source_numbers"])
             rprint(
-                f"[green]Merging TTS cues "
+                f"[green]Merging TTS text "
                 f"{previous['source_numbers']} ({previous['speaker']}, gap={gap:.3f}s)[/green]"
             )
         else:
+            row = dict(row)
+            row["source_numbers"] = [int(row["number"])]
             row["tts_merge_count"] = 1
             grouped.append(row)
 

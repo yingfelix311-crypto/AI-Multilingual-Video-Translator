@@ -940,8 +940,10 @@ async function control(action) {
 // ------------
 
 function mergeMaxGapSeconds() {
-  const value = Number(cfg("speaker_tagging.tts_merge_max_gap"));
-  return Number.isFinite(value) ? value : 1;
+  const refer = Number(cfg("speaker_tagging.refer_merge_max_gap"));
+  if (Number.isFinite(refer)) return refer;
+  const legacy = Number(cfg("speaker_tagging.tts_merge_max_gap"));
+  return Number.isFinite(legacy) ? legacy : 1;
 }
 
 function autoSuggestDraftMerges() {
@@ -1817,7 +1819,7 @@ function renderSpeakers() {
                   type: "checkbox",
                   checked: !!item.merge_with_previous,
                   disabled: busy,
-                  "aria-label": `第 ${index + 1} 条并入上一条（参考与 TTS）`,
+                  "aria-label": `第 ${index + 1} 条并入上一条参考音频`,
                   onchange: (event) => setDraftMerge(new Set([item._id]), event.target.checked),
                 }),
                 error.merge ? el("div", { class: "row-error-text", text: error.merge }) : null
@@ -2211,14 +2213,159 @@ async function saveTaskText(number, text, button) {
   }
 }
 
+// ------------
+// Qwen TTS emotion tags (right-click insert in dubbing task text)
+// ------------
+
+const QWEN_EMOTION_TAG_GROUPS = [
+  {
+    title: "情绪控制",
+    items: [
+      ["[sad]", "悲伤"],
+      ["[amazed]", "惊讶"],
+      ["[angry]", "愤怒"],
+      ["[excited]", "兴奋"],
+      ["[sarcastic]", "讽刺"],
+      ["[curious]", "好奇"],
+      ["[bored]", "无聊"],
+      ["[tired]", "疲惫"],
+      ["[scornful]", "轻蔑"],
+      ["[panicked]", "慌张"],
+      ["[empathetic]", "共情"],
+      ["[reluctantly]", "不情愿"],
+      ["[crying]", "哭泣"],
+      ["[serious]", "严肃"],
+      ["[mischievously]", "调皮"],
+      ["[like dracula]", "德古拉"],
+      ["[trembling]", "颤抖"],
+      ["[whispers]", "耳语"],
+      ["[shouting]", "喊叫"],
+      ["[deep and loud shouting]", "低沉大喊"],
+      ["[asmr]", "ASMR"],
+      ["[very slowly]", "很慢"],
+      ["[very fast]", "很快"],
+    ],
+  },
+  {
+    title: "语气效果",
+    items: [
+      ["[gasp]", "倒吸气"],
+      ["[sighing]", "叹气"],
+      ["[clears throat]", "清嗓"],
+      ["[giggles]", "咯咯笑"],
+      ["[laughing]", "大笑"],
+      ["[cough]", "咳嗽"],
+      ["[snorts]", "喷鼻"],
+    ],
+  },
+];
+
+const emotionMenu = { node: null, area: null, onClose: null };
+
+function isQwenTts() {
+  const method = (state.workspace && state.workspace.tts_method) || cfg("tts_method");
+  return method === "qwen_tts";
+}
+
+function closeEmotionMenu() {
+  if (!emotionMenu.node) return;
+  emotionMenu.node.hidden = true;
+  emotionMenu.area = null;
+  if (emotionMenu.onClose) {
+    document.removeEventListener("pointerdown", emotionMenu.onClose, true);
+    document.removeEventListener("keydown", emotionMenu.onClose, true);
+    window.removeEventListener("resize", emotionMenu.onClose);
+    window.removeEventListener("scroll", emotionMenu.onClose, true);
+    emotionMenu.onClose = null;
+  }
+}
+
+function insertTextAtCursor(area, text) {
+  const start = area.selectionStart ?? area.value.length;
+  const end = area.selectionEnd ?? start;
+  area.setRangeText(text, start, end, "end");
+  area.dispatchEvent(new Event("input", { bubbles: true }));
+  area.focus();
+}
+
+function ensureEmotionMenu() {
+  if (emotionMenu.node) return emotionMenu.node;
+  const menu = el("div", {
+    class: "emotion-menu",
+    role: "menu",
+    "aria-label": "Qwen 情绪标签",
+    hidden: true,
+  });
+  for (const group of QWEN_EMOTION_TAG_GROUPS) {
+    menu.append(el("div", { class: "emotion-menu-title", text: group.title }));
+    for (const [tag, label] of group.items) {
+      menu.append(
+        el("button", {
+          class: "emotion-menu-item",
+          type: "button",
+          role: "menuitem",
+          text: `${tag} ${label}`,
+          onclick: () => {
+            const area = emotionMenu.area;
+            closeEmotionMenu();
+            if (area && !area.disabled) insertTextAtCursor(area, tag);
+          },
+        })
+      );
+    }
+  }
+  document.body.append(menu);
+  emotionMenu.node = menu;
+  return menu;
+}
+
+function openEmotionMenu(area, clientX, clientY) {
+  closeEmotionMenu();
+  const menu = ensureEmotionMenu();
+  emotionMenu.area = area;
+  menu.hidden = false;
+  const pad = 8;
+  const width = menu.offsetWidth;
+  const height = menu.offsetHeight;
+  const left = Math.min(Math.max(pad, clientX), window.innerWidth - width - pad);
+  const top = Math.min(Math.max(pad, clientY), window.innerHeight - height - pad);
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+
+  emotionMenu.onClose = (event) => {
+    if (event.type === "keydown" && event.key !== "Escape") return;
+    if (event.type === "pointerdown" && menu.contains(event.target)) return;
+    closeEmotionMenu();
+  };
+  // Defer so the opening right-click does not immediately dismiss the menu.
+  requestAnimationFrame(() => {
+    if (!emotionMenu.onClose) return;
+    document.addEventListener("pointerdown", emotionMenu.onClose, true);
+    document.addEventListener("keydown", emotionMenu.onClose, true);
+    window.addEventListener("resize", emotionMenu.onClose);
+    window.addEventListener("scroll", emotionMenu.onClose, true);
+  });
+}
+
 function taskTextEditor(task, busy) {
+  const qwen = isQwenTts();
   const area = el("textarea", {
-    class: "task-text-input",
+    class: qwen ? "task-text-input task-text-input-qwen" : "task-text-input",
     rows: "2",
-    "aria-label": `任务 ${task.number} 的字幕文本`,
+    "aria-label": qwen
+      ? `任务 ${task.number} 的字幕文本（右键插入情绪标签）`
+      : `任务 ${task.number} 的字幕文本`,
     disabled: busy,
   });
   area.value = task.text || "";
+  if (qwen) {
+    area.title = "右键插入 Qwen 情绪标签";
+    area.addEventListener("contextmenu", (event) => {
+      if (busy || area.disabled) return;
+      event.preventDefault();
+      openEmotionMenu(area, event.clientX, event.clientY);
+    });
+  }
 
   const saveBtn = el("button", {
     class: "btn btn-ghost btn-sm",
@@ -2254,12 +2401,17 @@ function taskTextEditor(task, busy) {
   });
   saveBtn.addEventListener("click", () => saveTaskText(task.number, area.value, saveBtn));
 
-  return el(
-    "div",
-    { class: "task-text-edit" },
-    area,
-    el("div", { class: "btn-row task-text-actions" }, saveBtn, resetBtn)
-  );
+  const children = [area];
+  if (qwen) {
+    children.push(
+      el("p", {
+        class: "task-text-hint",
+        text: "Qwen TTS：准备阶段已自动标注；可在光标处右键改标签，保存后合成按文本执行",
+      })
+    );
+  }
+  children.push(el("div", { class: "btn-row task-text-actions" }, saveBtn, resetBtn));
+  return el("div", { class: "task-text-edit" }, ...children);
 }
 
 function taskAudioStack(task) {
@@ -2472,6 +2624,12 @@ function renderTasks() {
   }
   section.hidden = false;
   syncNavAvailability();
+  const bandDesc = section.querySelector(".band-desc");
+  if (bandDesc) {
+    bandDesc.textContent = isQwenTts()
+      ? "可改字幕文本；准备阶段已写入情绪标签，可在文本框右键修改。单条重生成先出候选供试听，采用后再统一合片。"
+      : "可改字幕文本；单条重生成先出候选供试听，采用后再统一合片。";
+  }
 
   const tasks = data.tasks;
   const selected = state.taskSelected;
@@ -2908,17 +3066,29 @@ function renderUsage() {
   const usage = state.usage || {};
   const gemini = usage.gemini || {};
   const qwen = usage.qwen || {};
+  const eleven = usage.elevenlabs || {};
   const geminiUsd = Number(gemini.cost_usd) || 0;
   const qwenCny = Number(qwen.cost_cny) || 0;
+  const elevenUsd = Number(eleven.cost_usd) || 0;
   const geminiTokens = Number(gemini.total_tokens) || 0;
   const qwenSeconds = Number(qwen.seconds) || 0;
+  const qwenChars = Number(qwen.characters) || 0;
+  const elevenChars = Number(eleven.characters) || 0;
+  const qwenParts = [];
+  if (qwenSeconds > 0) qwenParts.push(`${qwenSeconds.toFixed(1)}s ASR`);
+  if (qwenChars > 0) qwenParts.push(`${qwenChars} chars TTS`);
   chip.title = [
     usage.note || "用量来自 API 返回；金额按官方标价估算",
     `Gemini ${gemini.calls || 0} 次 · ${geminiTokens} tokens`,
-    `Qwen ${qwen.calls || 0} 次 · ${qwenSeconds.toFixed(1)}s 音频`,
+    `Qwen ${qwen.calls || 0} 次 · ${qwenParts.join(" · ") || "0"}`,
+    `ElevenLabs ${eleven.calls || 0} 次 · ${elevenChars} chars TTS`,
     `约合 ¥${(Number(usage.total_cny_approx) || 0).toFixed(2)}`,
   ].join("\n");
-  chip.textContent = `Gemini ${fmtMoney(geminiUsd, "USD")} · Qwen ${fmtMoney(qwenCny, "CNY")}`;
+  chip.textContent = [
+    `Gemini ${fmtMoney(geminiUsd, "USD")}`,
+    `Qwen ${fmtMoney(qwenCny, "CNY")}`,
+    `11Labs ${fmtMoney(elevenUsd, "USD")}`,
+  ].join(" · ");
 }
 
 function renderHero() {
@@ -2927,6 +3097,7 @@ function renderHero() {
   const usage = state.usage || {};
   const geminiUsd = Number(usage.gemini?.cost_usd) || 0;
   const qwenCny = Number(usage.qwen?.cost_cny) || 0;
+  const elevenUsd = Number(usage.elevenlabs?.cost_usd) || 0;
   const stats = [
     ["MEDIA", ws.media ? fmtClock(ws.media.duration) : "—"],
     ["CUES", ws.prepared.cue_count || (ws.uploads.trans ? ws.uploads.trans.cue_count : 0) || "—"],
@@ -2934,6 +3105,7 @@ function renderHero() {
     ["ENGINE", engineLabel()],
     ["GEMINI", fmtMoney(geminiUsd, "USD")],
     ["QWEN", fmtMoney(qwenCny, "CNY")],
+    ["11LABS", fmtMoney(elevenUsd, "USD")],
   ];
   replace(
     byId("hero-stats"),

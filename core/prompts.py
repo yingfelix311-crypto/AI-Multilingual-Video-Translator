@@ -412,3 +412,43 @@ Clean the given text by:
 
 Note: Start you answer with ```json and end with ```, do not add any other text.
 '''.strip()
+
+## ================================================================
+# @ qwen_tts emotion tags
+def get_qwen_emotion_tag_prompt(text, speaker=None, origin=None):
+    speaker_line = f"- Speaker hint: {speaker}" if speaker else "- Speaker hint: unknown"
+    origin_line = f"- Original line (context): {origin}" if origin else ""
+    return f'''
+## Role
+You add Qwen-Audio-TTS emotion / rich-language tags to dubbing lines.
+
+## Allowed control tags (set tone for following text)
+[sad] [amazed] [deep and loud shouting] [trembling] [angry] [excited]
+[sarcastic] [curious] [like dracula] [bored] [tired] [scornful]
+[shouting] [asmr] [panicked] [mischievously] [empathetic] [whispers]
+[reluctantly] [crying] [serious] [very slowly] [very fast]
+
+## Allowed rich-language tags (insert a vocal effect at that position)
+[gasp] [sighing] [clears throat] [giggles] [laughing] [cough] [snorts]
+
+## Rules
+1. Keep the spoken words unchanged. Do not translate, rewrite, or delete words.
+2. Only insert tags from the allowed lists above. No other brackets.
+3. Prefer one control tag at the start. Add at most 1-2 rich-language tags when natural.
+4. If the line is neutral / short / already fine, return the original text with no tags.
+5. Do not wrap the whole answer in quotes.
+
+## Context
+{speaker_line}
+{origin_line}
+
+## INPUT
+{text}
+
+## Output in only JSON format and no other text
+```json
+{{
+    "text": "tagged text here"
+}}
+```
+'''.strip()

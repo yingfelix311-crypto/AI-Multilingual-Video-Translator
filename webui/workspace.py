@@ -64,7 +64,7 @@ SECRETS = {
     },
     "qwen": {
         "label": "Qwen API Key",
-        "hint": "字级对齐 / 视频直入转写（DashScope）",
+        "hint": "字级对齐 / 视频直入转写 / Qwen Audio TTS（DashScope）",
         "config_key": "qwen_asr.api_key",
         "key_file": "QWEN_API_KEY",
     },
@@ -77,6 +77,7 @@ SECRETS = {
 TTS_OPTIONS = [
     ["custom_tts", "NoizAI"],
     ["elevenlabs_tts", "ElevenLabs"],
+    ["qwen_tts", "Qwen Audio TTS"],
     ["edge_tts", "Edge TTS（免费，无克隆）"],
 ]
 
@@ -133,13 +134,60 @@ CONFIG_GROUPS = [
             {"key": "elevenlabs_tts.similarity_boost", "label": "相似度", "type": "number", "min": 0, "max": 1, "step": 0.05},
             {"key": "elevenlabs_tts.style", "label": "风格强度", "type": "number", "min": 0, "max": 1, "step": 0.05},
             {"key": "elevenlabs_tts.use_speaker_boost", "label": "Speaker Boost", "type": "bool"},
-            {"key": "elevenlabs_tts.max_workers", "label": "并发数", "type": "number", "min": 1, "max": 16, "step": 1},
+            {
+                "key": "elevenlabs_tts.max_workers",
+                "label": "并发数（eleven_v3 套餐顶格约 15；Flash 可达 30）",
+                "type": "number",
+                "min": 1,
+                "max": 30,
+                "step": 1,
+            },
+        ],
+    },
+    {
+        "id": "qwen_tts",
+        "title": "Qwen Audio TTS 参数",
+        "when": ["tts_method", "qwen_tts"],
+        "fields": [
+            {
+                "key": "qwen_tts.mode",
+                "label": "音色模式",
+                "type": "select",
+                "options": [["clone", "克隆原说话人（临时音色）"], ["preset", "固定系统音色"]],
+            },
+            {
+                "key": "qwen_tts.model",
+                "label": "模型",
+                "type": "select",
+                "options": [
+                    ["qwen-audio-3.0-tts-plus", "qwen-audio-3.0-tts-plus"],
+                    ["qwen-audio-3.0-tts-flash", "qwen-audio-3.0-tts-flash"],
+                ],
+            },
+            {"key": "qwen_tts.voice", "label": "固定音色（preset）", "type": "text"},
+            {"key": "qwen_tts.language_hints", "label": "语言提示", "type": "text"},
+            {"key": "qwen_tts.speech_rate", "label": "语速", "type": "number", "min": 0.5, "max": 2, "step": 0.05},
+            {"key": "qwen_tts.instruction", "label": "风格指令", "type": "text"},
+            {
+                "key": "qwen_tts.emotion_tags",
+                "label": "准备阶段 LLM 写入情绪标签",
+                "type": "bool",
+            },
+            {"key": "qwen_tts.enable_preprocess", "label": "复刻前音频预处理", "type": "bool"},
+            {
+                "key": "qwen_tts.max_workers",
+                "label": "并发数（建议 6；TTS 限 3 RPS，复刻限 10 RPS）",
+                "type": "number",
+                "min": 1,
+                "max": 12,
+                "step": 1,
+            },
         ],
     },
     {
         "id": "speaker",
         "title": "人物标记与参考音频分组",
-        "desc": "由 LLM 推断人物；相邻同人物字幕可合并参考音频，间隔不超过阈值时合成一次 TTS。",
+        "desc": "由 LLM 推断人物。参考音频合并与 TTS 文本合并都必须同角色，并各自使用间隔阈值；设为 0 表示该侧永不合并。",
         "fields": [
             {"key": "speaker_tagging.enabled", "label": "启用 LLM 人物标记", "type": "bool"},
             {
@@ -151,8 +199,16 @@ CONFIG_GROUPS = [
                 "step": 0.05,
             },
             {
+                "key": "speaker_tagging.refer_merge_max_gap",
+                "label": "合并参考音最大间隔（秒）",
+                "type": "number",
+                "min": 0,
+                "max": 5,
+                "step": 0.1,
+            },
+            {
                 "key": "speaker_tagging.tts_merge_max_gap",
-                "label": "合并上一条允许的最大间隔（秒）",
+                "label": "合并 TTS 文本最大间隔（秒，0=不合）",
                 "type": "number",
                 "min": 0,
                 "max": 5,

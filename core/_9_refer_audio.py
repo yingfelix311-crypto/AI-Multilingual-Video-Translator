@@ -28,13 +28,24 @@ def extract_audio(audio_data, sr, start_time, end_time, out_file):
     sf.write(out_file, audio_data[start:end], sr)
 
 
+def _speaker_label(row):
+    value = row.get("speaker")
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none"}:
+        return ""
+    return text
+
+
 def _reference_groups(df):
-    """Group adjacent cues only for reference-audio pooling."""
+    """Group adjacent same-speaker cues for reference-audio pooling."""
     groups = []
     current = []
     for _, row in df.iterrows():
         merge = bool(row.get("reference_merge_with_previous", False))
-        if current and merge:
+        same_speaker = bool(current) and _speaker_label(current[-1]) == _speaker_label(row)
+        if current and merge and same_speaker and _speaker_label(row):
             current.append(row)
         else:
             if current:

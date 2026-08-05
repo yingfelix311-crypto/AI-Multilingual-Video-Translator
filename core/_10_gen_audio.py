@@ -103,6 +103,8 @@ def generate_tts_audio(tasks_df: pd.DataFrame) -> pd.DataFrame:
             max_workers = load_key("noiz_tts.max_workers")
         elif tts_method == "elevenlabs_tts":
             max_workers = load_key("elevenlabs_tts.max_workers")
+        elif tts_method == "qwen_tts":
+            max_workers = load_key("qwen_tts.max_workers")
         else:
             max_workers = load_key("max_workers")
         # parallel processing for remaining tasks

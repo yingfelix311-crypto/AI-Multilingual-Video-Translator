@@ -269,12 +269,31 @@ _FILLER_TEXT_RE = re.compile(
 
 
 def _merge_max_gap_seconds():
+    """Gap used by cue/speaker UI for reference-merge suggestions."""
     from core.utils import load_key
 
-    try:
-        return float(load_key("speaker_tagging.tts_merge_max_gap"))
-    except Exception:
-        return 1.0
+    for key in (
+        "speaker_tagging.refer_merge_max_gap",
+        "speaker_tagging.tts_merge_max_gap",
+        "speaker_tagging.max_gap",
+    ):
+        try:
+            return float(load_key(key))
+        except Exception:
+            continue
+    return 1.0
+
+
+def _tts_merge_max_gap_seconds():
+    """Gap used when absorbing short fillers into neighboring TTS text."""
+    from core.utils import load_key
+
+    for key in ("speaker_tagging.tts_merge_max_gap", "speaker_tagging.max_gap"):
+        try:
+            return float(load_key(key))
+        except Exception:
+            continue
+    return 0.0
 
 
 def _is_filler_text(text):
@@ -398,7 +417,7 @@ def repair_short_filler_cues(items):
     if not isinstance(items, list) or not items:
         return [], [], []
 
-    max_gap = _merge_max_gap_seconds()
+    max_gap = _tts_merge_max_gap_seconds()
     parsed = []
     for position, raw in enumerate(items, 1):
         if not isinstance(raw, dict):
@@ -765,9 +784,11 @@ def apply_speaker_tags(items):
     Path(_8_1_AUDIO_TASK).unlink(missing_ok=True)
 
     from core import _8_1_audio_task, _8_2_dub_chunks, _9_refer_audio
+    from core.tts_backend.qwen_tts import tag_audio_tasks_emotions
 
     _8_1_audio_task.gen_audio_task_main()
     _8_2_dub_chunks.gen_dub_chunks()
+    tag_audio_tasks_emotions()
     _9_refer_audio.extract_refer_audio_main()
 
     after = snapshot_tasks()
@@ -854,9 +875,11 @@ def apply_cue_draft(items, media_duration=None, keep_original=None):
     )
 
     from core import _8_1_audio_task, _8_2_dub_chunks, _9_refer_audio
+    from core.tts_backend.qwen_tts import tag_audio_tasks_emotions
 
     _8_1_audio_task.gen_audio_task_main()
     _8_2_dub_chunks.gen_dub_chunks()
+    tag_audio_tasks_emotions()
     _9_refer_audio.extract_refer_audio_main()
     after = snapshot_tasks()
     return {
@@ -1308,6 +1331,8 @@ def generate_candidate_steps(task_number, count=1, force_shorten=False):
             max_workers = int(load_key("noiz_tts.max_workers") or 1)
         elif tts_method == "elevenlabs_tts":
             max_workers = int(load_key("elevenlabs_tts.max_workers") or 1)
+        elif tts_method == "qwen_tts":
+            max_workers = int(load_key("qwen_tts.max_workers") or 1)
         else:
             max_workers = int(load_key("max_workers") or 1)
         max_workers = max(1, min(count, max_workers))

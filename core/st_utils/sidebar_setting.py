@@ -246,6 +246,7 @@ def page_setting():
             "gpt_sovits",
             "custom_tts",
             "elevenlabs_tts",
+            "qwen_tts",
             "sf_cosyvoice2",
             "f5tts",
         ]
@@ -258,6 +259,7 @@ def page_setting():
             "gpt_sovits": t("GPT-SoVITS"),
             "custom_tts": "NoizAI TTS",
             "elevenlabs_tts": "ElevenLabs TTS",
+            "qwen_tts": t("Qwen Audio TTS"),
             "sf_cosyvoice2": t("SiliconFlow CosyVoice2"),
             "f5tts": t("F5-TTS"),
         }
@@ -369,6 +371,46 @@ def page_setting():
                 config_input("ElevenLabs Voice ID", "elevenlabs_tts.voice_id")
             config_input("ElevenLabs Model ID", "elevenlabs_tts.model_id")
 
+        elif select_tts == "qwen_tts":
+            from core.utils.config_utils import load_secret
+            qwen_key = load_secret("qwen_tts.api_key", "QWEN_API_KEY")
+            if (
+                load_key("qwen_tts.api_key") in ("", "YOUR_API_KEY", "your_qwen_api_key")
+                and qwen_key not in ("", "YOUR_API_KEY", "your_qwen_api_key")
+            ):
+                st.caption("Using API key from QWEN_API_KEY file")
+            config_input("Qwen TTS API Key", "qwen_tts.api_key")
+            config_input("Qwen TTS Model", "qwen_tts.model")
+
+            mode_options = {
+                "clone": "Clone from video (refers/)",
+                "preset": "Preset system / custom voice",
+            }
+            current_mode = load_key("qwen_tts.mode")
+            if current_mode not in mode_options:
+                current_mode = "clone"
+            selected_mode = st.selectbox(
+                "Qwen TTS Mode",
+                options=list(mode_options.keys()),
+                format_func=lambda x: mode_options[x],
+                index=list(mode_options.keys()).index(current_mode),
+                help="Clone enrolls a temporary voice from output/audio/refers/{n}.wav",
+            )
+            if selected_mode != load_key("qwen_tts.mode"):
+                update_key("qwen_tts.mode", selected_mode)
+                st.rerun()
+            if selected_mode == "preset":
+                config_input("Qwen TTS Voice", "qwen_tts.voice")
+            config_input("Qwen Language Hint", "qwen_tts.language_hints")
+            config_input("Qwen Instruction", "qwen_tts.instruction")
+            emotion_tags = st.checkbox(
+                "LLM emotion tags (stage 1)",
+                value=bool(load_key("qwen_tts.emotion_tags")),
+                help="During prepare, ask LLM to write Qwen [excited]/[sad]/[laughing] tags into audio-task text",
+            )
+            if emotion_tags != bool(load_key("qwen_tts.emotion_tags")):
+                update_key("qwen_tts.emotion_tags", emotion_tags)
+
         elif select_tts == "custom_tts":
             from core.utils.config_utils import load_secret
             noiz_key = load_secret("noiz_tts.api_key", "NOIZ_API_KEY")
@@ -419,19 +461,38 @@ def page_setting():
                         st.rerun()
 
                     try:
-                        current_gap = float(load_key("speaker_tagging.tts_merge_max_gap"))
+                        current_refer_gap = float(load_key("speaker_tagging.refer_merge_max_gap"))
                     except KeyError:
-                        current_gap = float(load_key("speaker_tagging.max_gap"))
-                    max_gap = st.slider(
-                        "Merge-with-previous max gap (seconds)",
+                        try:
+                            current_refer_gap = float(load_key("speaker_tagging.tts_merge_max_gap"))
+                        except KeyError:
+                            current_refer_gap = float(load_key("speaker_tagging.max_gap"))
+                    refer_gap = st.slider(
+                        "Reference merge max gap (seconds)",
                         min_value=0.0,
-                        max_value=3.0,
-                        value=current_gap,
+                        max_value=5.0,
+                        value=current_refer_gap,
                         step=0.1,
-                        help="Same limit for reference pooling and TTS source merge",
+                        help="Pool clone reference audio for same-speaker cues within this gap",
                     )
-                    if abs(max_gap - current_gap) > 1e-9:
-                        update_key("speaker_tagging.tts_merge_max_gap", max_gap)
+                    if abs(refer_gap - current_refer_gap) > 1e-9:
+                        update_key("speaker_tagging.refer_merge_max_gap", refer_gap)
+                        st.rerun()
+
+                    try:
+                        current_tts_gap = float(load_key("speaker_tagging.tts_merge_max_gap"))
+                    except KeyError:
+                        current_tts_gap = 0.0
+                    tts_gap = st.slider(
+                        "TTS text merge max gap (seconds)",
+                        min_value=0.0,
+                        max_value=5.0,
+                        value=current_tts_gap,
+                        step=0.1,
+                        help="Concatenate TTS text into one task; 0 means never merge text",
+                    )
+                    if abs(tts_gap - current_tts_gap) > 1e-9:
+                        update_key("speaker_tagging.tts_merge_max_gap", tts_gap)
                         st.rerun()
             config_input("NoizAI Target Lang", "noiz_tts.target_lang")
             similarity_enh = st.toggle(
