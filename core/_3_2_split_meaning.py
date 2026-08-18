@@ -60,6 +60,13 @@ def split_sentence(sentence, num_parts, word_limit=20, index=-1, retry_attempt=0
     choice = response_data["choice"]
     best_split = response_data[f"split{choice}"]
     split_points = find_split_positions(sentence, best_split)
+    if len(split_points) != max(0, num_parts - 1):
+        console.print(
+            "[yellow]⚠️ GPT split could not be mapped back to the source; "
+            "keeping original sentence for timestamp safety.[/yellow]"
+        )
+        best_split = sentence
+        split_points = []
     # split the sentence based on the split points
     for i, split_point in enumerate(split_points):
         if i == 0:

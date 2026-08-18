@@ -2,6 +2,7 @@ import os
 import warnings
 import time
 import subprocess
+import re
 import torch
 import functools
 from pathlib import Path
@@ -51,6 +52,34 @@ def _has_complete_hf_snapshot(cache_root, repo_id):
             return True
     return False
 
+
+def _synthesize_segment_words(result):
+    for segment in result.get("segments", []):
+        text = str(segment.get("text") or "").strip()
+        if not text:
+            segment["words"] = []
+            continue
+        start = float(segment.get("start") or 0)
+        end = float(segment.get("end") or start)
+        if result.get("language") == "zh":
+            words = [character for character in text if character.strip()]
+        else:
+            words = [token for token in re.findall(r"\S+", text) if token.strip()]
+        if not words:
+            segment["words"] = []
+            continue
+        duration = max(end - start, 0.05)
+        step = duration / len(words)
+        segment["words"] = [
+            {
+                "word": word,
+                "start": start + index * step,
+                "end": start + (index + 1) * step,
+            }
+            for index, word in enumerate(words)
+        ]
+    return result
+
 @except_handler("failed to check hf mirror", default_return=None)
 def check_hf_mirror():
     mirrors = {'Official': 'huggingface.co', 'Mirror': 'hf-mirror.com'}
@@ -94,11 +123,12 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     rprint(f"[green]▶️ Starting WhisperX for segment {start:.2f}s to {end:.2f}s...[/green]")
     
     download_root = MODEL_DIR
-    if WHISPER_LANGUAGE == 'zh':
+    configured_model = load_key("whisper.model")
+    if WHISPER_LANGUAGE == 'zh' and configured_model not in {"small", "tiny"}:
         model_name = "Huan69/Belle-whisper-large-v3-zh-punct-fasterwhisper"
         local_model = os.path.join(MODEL_DIR, "Belle-whisper-large-v3-zh-punct-fasterwhisper")
     else:
-        model_name = load_key("whisper.model")
+        model_name = configured_model
         local_model = os.path.join(MODEL_DIR, model_name)
         
     if os.path.exists(local_model):
@@ -167,14 +197,34 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     # -------------------------
     align_start_time = time.time()
     # Align timestamps using vocal audio
-    model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
-    result = whisperx.align(result["segments"], model_a, metadata, vocal_audio_segment, device, return_char_alignments=False)
+    model_a = None
+    if result["language"] == "zh":
+        rprint(
+            "[yellow]⚠️ Skipping WhisperX zh alignment model for demo speed; "
+            "using segment timestamps.[/yellow]"
+        )
+        rprint(
+            "[yellow]⚠️ WhisperX alignment model unavailable; "
+            "falling back to segment timestamps.[/yellow]"
+        )
+        result = _synthesize_segment_words(result)
+    else:
+        try:
+            model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
+            result = whisperx.align(result["segments"], model_a, metadata, vocal_audio_segment, device, return_char_alignments=False)
+        except Exception as error:
+            rprint(
+                "[yellow]⚠️ WhisperX alignment model unavailable; "
+                f"falling back to segment timestamps: {error}[/yellow]"
+            )
+            result = _synthesize_segment_words(result)
     align_time = time.time() - align_start_time
     rprint(f"[cyan]⏱️ time align:[/cyan] {align_time:.2f}s")
 
     # Free GPU resources again
     torch.cuda.empty_cache()
-    del model_a
+    if model_a is not None:
+        del model_a
 
     # Adjust timestamps
     for segment in result['segments']:
