@@ -26,7 +26,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 OUTPUT_DIR = Path("output")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="VideoLingo Dubbing", docs_url=None, redoc_url=None)
+app = FastAPI(title="video translator", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/files", StaticFiles(directory=str(OUTPUT_DIR)), name="files")
 

@@ -1,4 +1,4 @@
-"""VideoLingo Enhanced Launcher - Pre-flight checks + logging."""
+"""video translator launcher - Pre-flight checks + logging."""
 import subprocess, sys, os, shutil, socket
 from pathlib import Path
 from datetime import datetime

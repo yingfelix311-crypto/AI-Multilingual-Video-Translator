@@ -1,4 +1,4 @@
-"""Entry point for the VideoLingo dubbing web UI."""
+"""Entry point for the video translator web UI."""
 
 import argparse
 import os
@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run the VideoLingo dubbing web UI")
+    parser = argparse.ArgumentParser(description="Run the video translator web UI")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8501)
     parser.add_argument("--reload", action="store_true")
@@ -25,7 +25,7 @@ def main():
 
     import uvicorn
 
-    print(f"VideoLingo Dubbing UI -> http://{args.host}:{args.port}")
+    print(f"video translator -> http://{args.host}:{args.port}")
     uvicorn.run(
         "webui.server:app",
         host=args.host,
